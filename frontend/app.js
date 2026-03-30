@@ -231,8 +231,13 @@
       );
 
       const terms = extractTerms(query);
+      // Rank by max(cos q·full, cos q·narrative); narrative = website+profile+CV only (no papers).
       const scored = idx.researchers.map((r) => {
-        const semantic = cosine(queryEmb, r.embedding);
+        let semantic = cosine(queryEmb, r.embedding);
+        const nar = r.embedding_narrative;
+        if (nar && nar.length === r.embedding.length) {
+          semantic = Math.max(semantic, cosine(queryEmb, nar));
+        }
         const { boost, matches } = keywordBoost(r, terms);
         return { r, score: semantic + boost, semantic, boost, matches };
       });

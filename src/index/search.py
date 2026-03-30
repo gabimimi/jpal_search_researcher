@@ -227,7 +227,11 @@ def search_compact(
             init = str(kf.get("Initiatives") or "").lower()
             if needle not in init:
                 continue
+        # max(full embedding, narrative = website+profile+cv) matches export_compact_index + app.js
         score = _dot(q, emb)
+        nar = r.get("embedding_narrative")
+        if nar and len(nar) == len(emb):
+            score = max(score, _dot(q, nar))
         kf = dict(r.get("key_fields") or {})
         if r.get("institution"):
             kf.setdefault("institution", r["institution"])

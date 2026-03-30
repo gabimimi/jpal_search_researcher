@@ -12,6 +12,8 @@ Strategy:
 Reads:  output/index/documents_with_embeddings.jsonl
         output/profiles/*.json
 Writes: frontend/profiles_index.json
+  Each researcher has "embedding" (all types) and optional "embedding_narrative"
+  (website + profile + CV). Search uses max(similarity to either).
 
 Run:
     python3 -m src.index.export_compact_index
@@ -25,7 +27,7 @@ import sys
 import time
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import AbstractSet, Any, Dict, List, Optional, Tuple
 
 EMBEDDINGS_JSONL = Path("output/index/documents_with_embeddings.jsonl")
 PROFILES_DIR = Path("output/profiles")
@@ -52,6 +54,10 @@ DOC_TYPE_WEIGHTS: Dict[str, float] = {
     "cv": 0.75,
 }
 DEFAULT_TYPE_WEIGHT = 0.7
+
+# Second vector: website + profile + CV only (no papers). Scoring uses max(full, narrative)
+# so flagship topics on bios/sites aren’t lost to huge paper lists.
+NARRATIVE_DOC_TYPES = frozenset({"website", "profile", "cv"})
 
 
 def _norm(v: List[float]) -> float:
@@ -95,6 +101,41 @@ def _reservoir_add(
     j = random.randint(1, seen_count)
     if j <= cap:
         bucket[random.randint(0, cap - 1)] = list(emb)
+
+
+def _weighted_type_mean_for_slug(
+    slug: str,
+    buckets: Dict[Tuple[str, str], List[List[float]]],
+    allowed_doc_types: Optional[AbstractSet[str]],
+) -> Optional[List[float]]:
+    """Weighted mean of per-type means; allowed_doc_types=None keeps all types."""
+    combined: Optional[List[float]] = None
+    wsum = 0.0
+    dim: Optional[int] = None
+
+    for dt in sorted({k[1] for k in buckets if k[0] == slug}):
+        if allowed_doc_types is not None and dt not in allowed_doc_types:
+            continue
+        key = (slug, dt)
+        vecs = buckets.get(key) or []
+        if not vecs:
+            continue
+        mu = _mean_embeddings(vecs)
+        if not mu:
+            continue
+        if dim is None:
+            dim = len(mu)
+        w = DOC_TYPE_WEIGHTS.get(dt, DEFAULT_TYPE_WEIGHT)
+        if combined is None:
+            combined = [w * x for x in mu]
+        else:
+            for j in range(dim):
+                combined[j] += w * mu[j]
+        wsum += w
+
+    if combined is None or wsum <= 0:
+        return None
+    return [x / wsum for x in combined]
 
 
 def load_profile_meta(profiles_dir: Path) -> Dict[str, Dict[str, Any]]:
@@ -177,47 +218,37 @@ def main() -> None:
     print("Loading profile metadata...")
     profile_meta = load_profile_meta(PROFILES_DIR)
 
-    print("Computing stratified weighted mean + normalized embeddings...")
+    print("Computing stratified embeddings (full + narrative max-pool source)…")
     researchers = []
     for slug in sorted(all_slugs):
-        combined: Optional[List[float]] = None
-        wsum = 0.0
-        dim: Optional[int] = None
-
-        for dt in sorted({k[1] for k in buckets if k[0] == slug}):
-            key = (slug, dt)
-            vecs = buckets.get(key) or []
-            if not vecs:
-                continue
-            mu = _mean_embeddings(vecs)
-            if not mu:
-                continue
-            if dim is None:
-                dim = len(mu)
-            w = DOC_TYPE_WEIGHTS.get(dt, DEFAULT_TYPE_WEIGHT)
-            if combined is None:
-                combined = [w * x for x in mu]
-            else:
-                for j in range(dim):
-                    combined[j] += w * mu[j]
-            wsum += w
-
-        if combined is None or wsum <= 0:
+        full_raw = _weighted_type_mean_for_slug(slug, buckets, None)
+        if full_raw is None:
             continue
 
-        avg = [x / wsum for x in combined]
-        norm_emb = _normalize(avg)
-        rounded = [round(x, FLOAT_PRECISION) for x in norm_emb]
+        norm_full = _normalize(full_raw)
+        rounded = [round(x, FLOAT_PRECISION) for x in norm_full]
+
+        narrative_raw = _weighted_type_mean_for_slug(slug, buckets, NARRATIVE_DOC_TYPES)
+        narrative_rounded: Optional[List[float]] = None
+        if narrative_raw is not None:
+            norm_nar = _normalize(narrative_raw)
+            narrative_rounded = [round(x, FLOAT_PRECISION) for x in norm_nar]
+            # Skip duplicate when narrative ≡ full (paper-less profiles)
+            if narrative_rounded == rounded:
+                narrative_rounded = None
 
         meta = profile_meta.get(slug, {})
-        researchers.append({
+        row: Dict[str, Any] = {
             "slug": slug,
             "name": meta.get("name") or slug,
             "embedding": rounded,
             "website_url": meta.get("website_url"),
             "institution": meta.get("institution"),
             "key_fields": meta.get("key_fields", {}),
-        })
+        }
+        if narrative_rounded is not None:
+            row["embedding_narrative"] = narrative_rounded
+        researchers.append(row)
 
     payload = {
         "model": model,
