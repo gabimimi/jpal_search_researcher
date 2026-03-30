@@ -29,6 +29,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import AbstractSet, Any, Dict, List, Optional, Tuple
 
+from src.index.search import KEYWORD_INDEX_FIELD, keyword_search_blob_from_profile
+
 EMBEDDINGS_JSONL = Path("output/index/documents_with_embeddings.jsonl")
 PROFILES_DIR = Path("output/profiles")
 OUT_FILE = Path("frontend/profiles_index.json")
@@ -154,17 +156,21 @@ def load_profile_meta(profiles_dir: Path) -> Dict[str, Dict[str, Any]]:
                     return str(val).strip()
                 return None
 
+            kf = {k: val for k, val in {
+                "Research Interests (open text)": v("Research Interests (open text)"),
+                "Sectors": v("Sectors"),
+                "Initiatives": v("Initiatives") or v("Related Initiative(s)"),
+                "Regional Office Affiliation": v("Regional Office Affiliation"),
+                "Specific Country Interest": v("Specific Country Interest"),
+                "Web Bio": v("Web Bio"),
+            }.items() if val}
+            blob = keyword_search_blob_from_profile(profile)
+            if blob.strip():
+                kf[KEYWORD_INDEX_FIELD] = blob
             meta[slug] = {
                 "name": profile.get("name") or slug,
                 "website_url": web.get("url") or web.get("final_url"),
-                "key_fields": {k: val for k, val in {
-                    "Research Interests (open text)": v("Research Interests (open text)"),
-                    "Sectors": v("Sectors"),
-                    "Initiatives": v("Initiatives") or v("Related Initiative(s)"),
-                    "Regional Office Affiliation": v("Regional Office Affiliation"),
-                    "Specific Country Interest": v("Specific Country Interest"),
-                    "Web Bio": v("Web Bio"),
-                }.items() if val},
+                "key_fields": kf,
                 "institution": oa.get("institution"),
             }
         except Exception:

@@ -65,7 +65,7 @@ DOC_TYPE_WEIGHTS: Dict[str, float] = {
     "cv": 0.75,
 }
 
-# Keyword boost: how much to add per matching query term in each field
+# Spreadsheet-only fields (keyword boost); not stored on sheet — see KEYWORD_INDEX_FIELD
 KEYWORD_BOOST_WEIGHTS: Dict[str, float] = {
     "Specific Country Interest":        0.15,  # geography is very specific
     "Regional Office Affiliation":      0.08,
@@ -73,7 +73,10 @@ KEYWORD_BOOST_WEIGHTS: Dict[str, float] = {
     "Sectors":                          0.05,
     "Initiatives":                      0.04,
     "Web Bio":                          0.03,
+    # Website scrape + OpenAlex titles (not in spreadsheet) — fixes “only Kenya matches”
+    "Website & publications (keyword index)": 0.06,
 }
+KEYWORD_INDEX_FIELD = "Website & publications (keyword index)"
 KEYWORD_BOOST_CAP = 0.40  # max total boost per researcher
 
 STOP_WORDS = {
@@ -93,24 +96,52 @@ DEFAULT_CANDIDATE_K = 500    # number of top chunks before aggregation
 # Keyword boost helpers
 # ---------------------------------------------------------------------------
 
+def keyword_search_blob_from_profile(profile: dict, max_chars: int = 12000) -> str:
+    """Lowercase text for literal keyword matching (website + paper titles)."""
+    parts: List[str] = []
+    web = profile.get("website") or {}
+    text = (web.get("text") or "").strip()
+    if text:
+        parts.append(text[:9000])
+    oa = profile.get("openalex_works") or {}
+    works = oa.get("works") or []
+    if isinstance(works, list):
+        titles: List[str] = []
+        for item in works[:80]:
+            if isinstance(item, dict) and item.get("title"):
+                titles.append(str(item["title"]))
+        if titles:
+            parts.append("\n".join(titles))
+    blob = " ".join(parts).lower()
+    return blob[:max_chars] if blob else ""
+
+
 def extract_query_terms(query: str) -> List[str]:
     """Return meaningful lowercase words from the query, excluding stop words."""
     words = re.findall(r"[a-zA-Z]{3,}", query.lower())
-    return [w for w in words if w not in STOP_WORDS]
+    out = [w for w in words if w not in STOP_WORDS]
+    # “RCT” rarely appears literally; prose uses “randomized”.
+    if "rct" in out:
+        for x in ("randomized", "randomised"):
+            if x not in out:
+                out.append(x)
+    return out
 
 
 def load_profile_metadata(profiles_dir: Path) -> Dict[str, Dict[str, str]]:
     """Load key metadata fields for every researcher, keyed by slug."""
+    sheet_fields = [f for f in KEYWORD_BOOST_WEIGHTS if f != KEYWORD_INDEX_FIELD]
     meta: Dict[str, Dict[str, str]] = {}
     for p in profiles_dir.glob("*.json"):
         try:
             profile = json.loads(p.read_text(encoding="utf-8"))
             slug = profile.get("slug") or p.stem
             sf = profile.get("spreadsheet_fields") or {}
-            meta[slug] = {
-                field: str(sf.get(field) or "").lower()
-                for field in KEYWORD_BOOST_WEIGHTS
-            }
+            row = {field: str(sf.get(field) or "").lower() for field in sheet_fields}
+            blob = keyword_search_blob_from_profile(profile)
+            if blob.strip():
+                row[KEYWORD_INDEX_FIELD] = blob
+            meta[slug] = row
         except Exception:
             continue
     return meta

@@ -42,6 +42,7 @@
     Sectors: 0.05,
     Initiatives: 0.04,
     "Web Bio": 0.03,
+    "Website & publications (keyword index)": 0.06,
   };
   const BOOST_CAP = 0.4;
 
@@ -182,7 +183,13 @@
 
   function extractTerms(query) {
     const m = query.toLowerCase().match(/[a-zA-Z]{3,}/g);
-    return m ? m.filter((w) => !STOP.has(w)) : [];
+    const words = m ? m.filter((w) => !STOP.has(w)) : [];
+    // “RCT” rarely appears in prose; match “randomized” / “randomised” too.
+    if (words.includes("rct")) {
+      if (!words.includes("randomized")) words.push("randomized");
+      if (!words.includes("randomised")) words.push("randomised");
+    }
+    return words;
   }
 
   function keywordBoost(researcher, terms) {
