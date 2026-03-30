@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Search J-PAL’s researcher database by topic, sector, country, or methodology." />
+  <title>Researcher Finder | J-PAL</title>
+  <!--
+    GitHub Pages (project site): if assets 404, uncomment and set your repo name:
+    <base href="/YOUR_REPO_NAME/" />
+  -->
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to main content</a>
+
+  <header class="site-header">
+    <div class="site-header__inner">
+      <div class="brand">
+        <a href="https://www.povertyactionlab.org/" target="_blank" rel="noopener noreferrer" aria-label="J-PAL home">
+          <img src="logo.svg" class="brand__logo" width="220" height="65" alt="J-PAL" />
+        </a>
+        <div class="brand__text">
+          <div class="brand__title">Researcher Finder</div>
+          <div class="brand__subtitle">Evidence-driven search across affiliated researchers</div>
+        </div>
+      </div>
+      <nav class="site-nav" aria-label="Utility">
+        <a href="https://www.povertyactionlab.org/" target="_blank" rel="noopener noreferrer">J-PAL.org</a>
+        <a href="https://www.povertyactionlab.org/research" target="_blank" rel="noopener noreferrer">Research</a>
+        <button type="button" class="btn-ghost" id="settingsBtn">Settings</button>
+      </nav>
+    </div>
+  </header>
+
+  <div class="page-intro">
+    <div class="page-intro__inner">
+      <h1>Find researchers by topic</h1>
+      <p class="lede">
+        Enter a research area, country, sector, or method in plain language. Results are ranked by similarity to
+        profiles and indexed publications (embeddings updated when you rebuild the index).
+      </p>
+      <div class="status-bar" id="deployBanner" hidden role="status"></div>
+      <form class="search-row" id="searchForm" role="search" aria-label="Researcher search">
+        <input
+          type="search"
+          id="queryInput"
+          name="q"
+          placeholder='e.g. cash transfers, K-12 education, climate adaptation'
+          autocomplete="off"
+          enterkeyhint="search"
+          aria-label="Search query"
+        />
+        <button type="submit" id="searchBtn">Search</button>
+      </form>
+      <div class="status-bar" id="statusBar" role="status" aria-live="polite"></div>
+    </div>
+  </div>
+
+  <main id="main">
+    <div class="results-meta" id="resultsMeta"></div>
+    <div id="resultsContainer"></div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="site-footer__inner">
+      <div class="footer-links">
+        <a href="https://www.povertyactionlab.org/about">About J-PAL</a>
+        <a href="https://www.povertyactionlab.org/privacy-policy">Privacy</a>
+        <a href="https://www.povertyactionlab.org/contact">Contact</a>
+      </div>
+      <p class="footer-note">
+        Internal discovery tool. Affiliation and profile data reflect your exported spreadsheet; verify details on
+        individual sites. For production embedding calls from the browser, configure <code>embedApiUrl</code> in
+        <code>config.json</code> (see <code>deploy/cloudflare-embed-worker.js</code>).
+      </p>
+    </div>
+  </footer>
+
+  <div class="modal-overlay" id="modalOverlay" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal">
+      <h2 id="modalTitle">Settings</h2>
+      <p id="modalProxyNote" hidden>
+        This deployment uses a server-side embedding endpoint. An OpenAI key in the browser is optional (for local
+        testing only).
+      </p>
+      <div id="modalKeySection">
+        <p>
+          For local use without a proxy, paste an OpenAI API key. It is stored only in this browser
+          (<code>localStorage</code>) and sent to OpenAI to embed your query. Direct browser calls may be blocked by
+          CORS; use <code>config.json</code> + Cloudflare Worker for public hosting.
+        </p>
+        <label class="visually-hidden" for="apiKeyInput">OpenAI API key</label>
+        <input type="password" id="apiKeyInput" name="apiKey" placeholder="sk-…" autocomplete="off" />
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn-secondary" id="modalCancel">Close</button>
+        <button type="button" class="btn-primary" id="modalSave">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+# Secrets
+.env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Generated pipeline output (includes multi-GB embeddings JSONL)
+output/
+
+# Local CV / scrape caches (regenerable)
+cache/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Optional: keep compact index out of git (use Git LFS or CI to build)
+# frontend/profiles_index.json
