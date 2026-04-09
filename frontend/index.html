@@ -98,7 +98,15 @@
   </div>
 
   <main id="main">
-    <div class="results-meta" id="resultsMeta"></div>
+    <div class="results-toolbar">
+      <div class="results-meta" id="resultsMeta"></div>
+      <div class="export-bar" id="exportBar" hidden>
+        <span class="export-label">Export:</span>
+        <button type="button" class="export-btn" data-format="csv">CSV</button>
+        <button type="button" class="export-btn" data-format="xlsx">Excel</button>
+        <button type="button" class="export-btn" data-format="pdf">PDF</button>
+      </div>
+    </div>
     <div id="resultsContainer"></div>
     <nav class="results-pager" id="resultsPager" hidden aria-label="Results pages"></nav>
   </main>
@@ -141,6 +149,9 @@
     </div>
   </div>
 
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" defer></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js" defer></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js" defer></script>
   <script src="app.js" defer></script>
 </body>
 </html>

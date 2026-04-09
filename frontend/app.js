@@ -81,6 +81,7 @@
   const filterSector = document.getElementById("filterSector");
   const filterType = document.getElementById("filterType");
   const resultsPager = document.getElementById("resultsPager");
+  const exportBar = document.getElementById("exportBar");
 
   function getApiKey() {
     return localStorage.getItem(LS_KEY) || "";
@@ -681,6 +682,7 @@
       resultsPager.hidden = true;
       resultsPager.innerHTML = "";
     }
+    if (exportBar) exportBar.hidden = true;
     searchResultsState = null;
 
     try {
@@ -788,10 +790,12 @@
       resultsMeta.textContent = `${chosen.length} match${chosen.length === 1 ? "" : "es"} for ${label}`;
 
       renderResultsPage();
+      if (exportBar) exportBar.hidden = chosen.length === 0;
     } catch (err) {
       setStatus(err.message || String(err), true);
       console.error(err);
       resultsContainer.innerHTML = `<div class="placeholder"><p>${escHtml(err.message || String(err))}</p></div>`;
+      if (exportBar) exportBar.hidden = true;
     } finally {
       searchBtn.disabled = false;
     }
@@ -1034,6 +1038,164 @@
         All matching researchers are shown, ranked and paginated.</p>
       </div>`;
   }
+
+  // ── Export helpers ──────────────────────────────────────────────────
+
+  const EXPORT_COLUMNS = [
+    { key: "rank", label: "Rank" },
+    { key: "name", label: "Name" },
+    { key: "institution", label: "Institution" },
+    { key: "type", label: "Researcher Type" },
+    { key: "country", label: "Country Interest" },
+    { key: "sectors", label: "Sectors" },
+    { key: "offices", label: "J-PAL Offices" },
+    { key: "languages", label: "Languages" },
+    { key: "interests", label: "Research Interests" },
+    { key: "score", label: "Score" },
+    { key: "website", label: "Website" },
+  ];
+
+  function buildExportRows() {
+    if (!searchResultsState) return [];
+    return searchResultsState.allResults.map((item, i) => {
+      const r = item.r;
+      const kf = r.key_fields || {};
+      return {
+        rank: i + 1,
+        name: r.name || r.slug || "",
+        institution: r.institution || "",
+        type: (kf["Researcher Type"] || "").replace(/;/g, ", "),
+        country: (kf["Specific Country Interest"] || "").replace(/;/g, ", "),
+        sectors: (kf.Sectors || "").replace(/;/g, ", "),
+        offices: kf.offices || "",
+        languages: kf.Languages || "",
+        interests: truncate(kf["Research Interests (open text)"] || "", 300),
+        score: item.score != null ? item.score.toFixed(3) : "",
+        website: r.website_url || r.personal_page_url || "",
+      };
+    });
+  }
+
+  function exportFilename() {
+    const q = (queryInput.value || "").trim().replace(/[^a-zA-Z0-9]+/g, "_").slice(0, 40) || "results";
+    return `researchers_${q}`;
+  }
+
+  function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 100);
+  }
+
+  function exportCSV() {
+    const rows = buildExportRows();
+    if (!rows.length) return;
+    const headers = EXPORT_COLUMNS.map((c) => c.label);
+    const csvEsc = (v) => {
+      const s = String(v ?? "");
+      return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines = [headers.map(csvEsc).join(",")];
+    for (const row of rows) {
+      lines.push(EXPORT_COLUMNS.map((c) => csvEsc(row[c.key])).join(","));
+    }
+    const bom = "\uFEFF";
+    const blob = new Blob([bom + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+    downloadBlob(blob, exportFilename() + ".csv");
+  }
+
+  function exportXLSX() {
+    if (typeof XLSX === "undefined") {
+      alert("Excel library not loaded. Check your internet connection and reload.");
+      return;
+    }
+    const rows = buildExportRows();
+    if (!rows.length) return;
+    const headers = EXPORT_COLUMNS.map((c) => c.label);
+    const data = [headers];
+    for (const row of rows) {
+      data.push(EXPORT_COLUMNS.map((c) => row[c.key]));
+    }
+    const ws = XLSX.utils.aoa_to_sheet(data);
+    const colWidths = EXPORT_COLUMNS.map((c, i) => {
+      let max = c.label.length;
+      for (const row of rows) {
+        const len = String(row[c.key] ?? "").length;
+        if (len > max) max = len;
+      }
+      return { wch: Math.min(max + 2, 50) };
+    });
+    ws["!cols"] = colWidths;
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Researchers");
+    XLSX.writeFile(wb, exportFilename() + ".xlsx");
+  }
+
+  function exportPDF() {
+    if (typeof window.jspdf === "undefined") {
+      alert("PDF library not loaded. Check your internet connection and reload.");
+      return;
+    }
+    const rows = buildExportRows();
+    if (!rows.length) return;
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+
+    const title = `Researcher search results — ${resultsMeta.textContent || ""}`;
+    doc.setFontSize(11);
+    doc.text(title, 40, 30);
+
+    const pdfCols = [
+      { key: "rank", label: "Rank" },
+      { key: "name", label: "Name" },
+      { key: "institution", label: "Institution" },
+      { key: "type", label: "Type" },
+      { key: "country", label: "Country" },
+      { key: "sectors", label: "Sectors" },
+      { key: "offices", label: "Offices" },
+      { key: "score", label: "Score" },
+    ];
+
+    const head = [pdfCols.map((c) => c.label)];
+    const body = rows.map((row) => pdfCols.map((c) => String(row[c.key] ?? "").slice(0, 60)));
+
+    doc.autoTable({
+      startY: 42,
+      head,
+      body,
+      styles: { fontSize: 7, cellPadding: 3 },
+      headStyles: { fillColor: [0, 120, 122], textColor: 255, fontStyle: "bold" },
+      alternateRowStyles: { fillColor: [247, 245, 243] },
+      margin: { left: 30, right: 30 },
+    });
+
+    doc.save(exportFilename() + ".pdf");
+  }
+
+  if (exportBar) {
+    exportBar.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-format]");
+      if (!btn || !searchResultsState) return;
+      const fmt = btn.getAttribute("data-format");
+      try {
+        if (fmt === "csv") exportCSV();
+        else if (fmt === "xlsx") exportXLSX();
+        else if (fmt === "pdf") exportPDF();
+      } catch (err) {
+        console.error("Export error:", err);
+        alert("Export failed: " + (err.message || err));
+      }
+    });
+  }
+
+  // ── Init ──────────────────────────────────────────────────────────
 
   async function init() {
     showPlaceholder();
