@@ -100,6 +100,7 @@ def _profile_text(profile: dict) -> str:
         "Regional Office Affiliation",
         "Regional interest",
         "Specific Country Interest",
+        "Languages",
         "Web Bio",
         "Publication Notes",
     ]:

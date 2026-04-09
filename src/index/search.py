@@ -67,26 +67,28 @@ DOC_TYPE_WEIGHTS: Dict[str, float] = {
     "cv": 0.75,
 }
 
-# Spreadsheet-only fields (keyword boost); not stored on sheet — see KEYWORD_INDEX_FIELD
+# Keyword boost: weights reflect how precisely each field describes the researcher's work.
+# Research interests and the full-text keyword blob are strongest; initiative fields are minor.
 KEYWORD_BOOST_WEIGHTS: Dict[str, float] = {
-    "Specific Country Interest":        0.15,  # geography is very specific
-    "Regional Office Affiliation":      0.08,
-    "Research Interests (open text)":   0.06,
-    "Sectors":                          0.05,
-    "offices":                          0.05,  # J-PAL office roster (extra sheet)
-    "Regional interest":                0.05,
-    "Sector/Initiative interest":       0.05,
-    "Initiatives":                      0.04,
-    "Researcher Type":                  0.04,  # affiliate / invited (Salesforce)
-    "initiatives":                      0.04,  # initiative memberships (extra sheet)
+    "Specific Country Interest":        0.12,
+    "Research Interests (open text)":   0.10,
+    "Website & publications (keyword index)": 0.10,
+    "institution":                      0.08,
+    "Sectors":                          0.06,
+    "Regional Office Affiliation":      0.06,
+    "Languages":                        0.05,
+    "offices":                          0.05,
+    "Regional interest":                0.04,
+    "Web Bio":                          0.04,
     "Publication Notes":                0.03,
-    "Web Bio":                          0.03,
-    "Related Initiative(s)":            0.03,
-    # Website scrape + OpenAlex titles (not in spreadsheet) — fixes “only Kenya matches”
-    "Website & publications (keyword index)": 0.06,
+    "Initiatives":                      0.03,
+    "initiatives":                      0.02,
+    "Researcher Type":                  0.02,
+    "Sector/Initiative interest":       0.02,
+    "Related Initiative(s)":            0.01,
 }
 KEYWORD_INDEX_FIELD = "Website & publications (keyword index)"
-KEYWORD_BOOST_CAP = 0.40  # max total boost per researcher
+KEYWORD_BOOST_CAP = 0.40
 
 STOP_WORDS = {
     "a", "an", "the", "in", "on", "at", "of", "for", "to", "with",
@@ -105,22 +107,63 @@ DEFAULT_CANDIDATE_K = 500    # number of top chunks before aggregation
 # Keyword boost helpers
 # ---------------------------------------------------------------------------
 
-def keyword_search_blob_from_profile(profile: dict, max_chars: int = 12000) -> str:
-    """Lowercase text for literal keyword matching (website + paper titles)."""
+def _infer_institution(profile: dict) -> str:
+    """Derive primary institution from OpenAlex author or works data."""
+    oa = profile.get("openalex_author") or {}
+    explicit = oa.get("institution")
+    if explicit and str(explicit).strip() not in ("", "None", "nan"):
+        return str(explicit).strip()
+    oa_id = oa.get("openalex_id", "")
+    aname = (oa.get("display_name") or profile.get("name") or "").lower()
+    works = (profile.get("openalex_works") or {}).get("works") or []
+    counts: Dict[str, int] = {}
+    for w in works:
+        for a in w.get("authorships", []):
+            matched = (oa_id and a.get("author_openalex_id") == oa_id) or \
+                      (aname and a.get("author_name", "").lower() == aname)
+            if matched:
+                for inst in a.get("institutions", []):
+                    if inst and str(inst).strip():
+                        counts[str(inst).strip()] = counts.get(str(inst).strip(), 0) + 1
+    if not counts:
+        return ""
+    return max(counts, key=counts.get)  # type: ignore[arg-type]
+
+
+def keyword_search_blob_from_profile(profile: dict, max_chars: int = 25000) -> str:
+    """Lowercase text for literal keyword matching (website, CV, paper titles+abstracts, institution)."""
     parts: List[str] = []
+
+    inst = _infer_institution(profile)
+    if inst:
+        parts.append(inst)
+
     web = profile.get("website") or {}
     text = (web.get("text") or "").strip()
     if text:
         parts.append(text[:9000])
+
+    cv = profile.get("cv") or {}
+    cv_text = (cv.get("text") or "").strip()
+    if cv_text and cv.get("status") == "ok":
+        parts.append(cv_text[:3000])
+
     oa = profile.get("openalex_works") or {}
     works = oa.get("works") or []
     if isinstance(works, list):
-        titles: List[str] = []
-        for item in works[:80]:
-            if isinstance(item, dict) and item.get("title"):
-                titles.append(str(item["title"]))
-        if titles:
-            parts.append("\n".join(titles))
+        work_parts: List[str] = []
+        for item in works[:50]:
+            if not isinstance(item, dict):
+                continue
+            t = item.get("title")
+            if t:
+                work_parts.append(str(t))
+            ab = (item.get("abstract") or "")[:300]
+            if ab:
+                work_parts.append(ab)
+        if work_parts:
+            parts.append("\n".join(work_parts))
+
     blob = " ".join(parts).lower()
     return blob[:max_chars] if blob else ""
 
@@ -139,7 +182,7 @@ def extract_query_terms(query: str) -> List[str]:
 
 def load_profile_metadata(profiles_dir: Path) -> Dict[str, Dict[str, str]]:
     """Load key metadata fields for every researcher, keyed by slug."""
-    sheet_fields = [f for f in KEYWORD_BOOST_WEIGHTS if f != KEYWORD_INDEX_FIELD]
+    sheet_fields = [f for f in KEYWORD_BOOST_WEIGHTS if f not in (KEYWORD_INDEX_FIELD, "institution")]
     meta: Dict[str, Dict[str, str]] = {}
     for p in profiles_dir.glob("*.json"):
         try:
@@ -147,6 +190,9 @@ def load_profile_metadata(profiles_dir: Path) -> Dict[str, Dict[str, str]]:
             slug = profile.get("slug") or p.stem
             sf = profile.get("spreadsheet_fields") or {}
             row = {field: str(sf.get(field) or "").lower() for field in sheet_fields}
+            inst = _infer_institution(profile)
+            if inst:
+                row["institution"] = inst.lower()
             blob = keyword_search_blob_from_profile(profile)
             if blob.strip():
                 row[KEYWORD_INDEX_FIELD] = blob

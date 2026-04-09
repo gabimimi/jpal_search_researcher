@@ -224,6 +224,118 @@ main {
   margin-bottom: 16px;
 }
 
+/* Refine filters */
+.filter-panel {
+  margin-top: 16px;
+  padding: 12px 16px;
+  background: var(--jpal-cream);
+  border: 1px solid var(--jpal-border-light);
+  border-radius: var(--radius);
+  max-width: var(--content-max);
+}
+.filter-panel__summary,
+.filter-panel > summary {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--jpal-charcoal);
+  cursor: pointer;
+  list-style-position: outside;
+}
+.filter-panel[open] > summary {
+  margin-bottom: 12px;
+}
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px 16px;
+  margin-bottom: 12px;
+}
+.filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8125rem;
+}
+.filter-field--wide {
+  grid-column: 1 / -1;
+}
+.filter-label {
+  font-weight: 600;
+  color: var(--jpal-gray);
+}
+.filter-field input {
+  font-family: inherit;
+  font-size: 0.875rem;
+  padding: 8px 10px;
+  border: 1px solid var(--jpal-border);
+  border-radius: var(--radius);
+  background: var(--jpal-white);
+}
+.filter-field input:focus {
+  outline: 2px solid var(--jpal-teal);
+  outline-offset: 1px;
+}
+.filter-hint {
+  font-size: 0.75rem;
+  color: var(--jpal-gray-mid);
+  line-height: 1.5;
+  margin: 0;
+}
+.filter-hint code {
+  font-size: 0.6875rem;
+  background: var(--jpal-white);
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+
+/* Pagination */
+.results-pager {
+  margin-top: 20px;
+  padding: 16px 0 32px;
+  display: flex;
+  justify-content: center;
+}
+.results-pager[hidden] {
+  display: none;
+}
+.pager-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.pager-btn {
+  font-family: inherit;
+  font-size: 0.8125rem;
+  min-width: 2.25rem;
+  padding: 6px 10px;
+  border: 1px solid var(--jpal-border);
+  border-radius: var(--radius);
+  background: var(--jpal-white);
+  color: var(--jpal-gray);
+  cursor: pointer;
+}
+.pager-btn:hover:not(:disabled) {
+  background: var(--jpal-cream);
+  color: var(--jpal-charcoal);
+}
+.pager-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.pager-btn.is-current {
+  background: var(--jpal-teal);
+  color: var(--jpal-white);
+  border-color: var(--jpal-teal);
+  font-weight: 600;
+}
+.pager-ellipsis {
+  padding: 0 4px;
+  color: var(--jpal-gray-mid);
+  font-size: 0.875rem;
+}
+
 /* Cards */
 .card {
   background: var(--jpal-white);

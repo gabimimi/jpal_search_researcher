@@ -1,5 +1,8 @@
 {
   "embedApiUrl": "",
   "indexUrl": "",
+  "pageSize": 30,
+  "relevanceFloor": 0.12,
+  "relevanceMargin": 0.1,
   "topN": 30
 }

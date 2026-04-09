@@ -28,10 +28,11 @@ KEEP_COLS = [
     "Sectors",
     "Sector/Initiative interest",
     "Specific Country Interest",
+    "Languages",
 ]
 
 # Omit from "missing columns" warning (only present after Salesforce fetch).
-_OPTIONAL_KEEP_COLS = frozenset({"Researcher Type"})
+_OPTIONAL_KEEP_COLS = frozenset({"Researcher Type", "Languages"})
 
 
 def prepare_researchers_dataframe(df: pd.DataFrame) -> pd.DataFrame:

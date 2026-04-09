@@ -159,6 +159,37 @@ def _normalize_sheet_list_cell(val: Any) -> Optional[str]:
     return s
 
 
+def _infer_institution(profile: dict) -> Optional[str]:
+    """Derive the researcher's primary institution from OpenAlex works authorship data."""
+    oa = profile.get("openalex_author") or {}
+    explicit = oa.get("institution")
+    if explicit and str(explicit).strip() not in {"", "None", "nan"}:
+        return str(explicit).strip()
+
+    oa_id = oa.get("openalex_id", "")
+    author_name = (oa.get("display_name") or profile.get("name") or "").lower()
+    works = (profile.get("openalex_works") or {}).get("works") or []
+    if not works:
+        return None
+
+    counts: Dict[str, int] = {}
+    for w in works:
+        for a in w.get("authorships", []):
+            matched = False
+            if oa_id and a.get("author_openalex_id") == oa_id:
+                matched = True
+            elif author_name and a.get("author_name", "").lower() == author_name:
+                matched = True
+            if matched:
+                for inst in a.get("institutions", []):
+                    if inst and str(inst).strip():
+                        counts[str(inst).strip()] = counts.get(str(inst).strip(), 0) + 1
+    if not counts:
+        return None
+    best = max(counts, key=counts.get)  # type: ignore[arg-type]
+    return best
+
+
 def load_profile_meta(profiles_dir: Path) -> Dict[str, Dict[str, Any]]:
     meta: Dict[str, Dict[str, Any]] = {}
     for p in profiles_dir.glob("*.json"):
@@ -178,6 +209,8 @@ def load_profile_meta(profiles_dir: Path) -> Dict[str, Dict[str, Any]]:
             offices_fmt = _normalize_sheet_list_cell(sf.get("offices"))
             initiatives_roster = _normalize_sheet_list_cell(sf.get("initiatives"))
 
+            inst_str = _infer_institution(profile)
+
             kf = {k: val for k, val in {
                 "Researcher Type": v("Researcher Type"),
                 "Research Interests (open text)": v("Research Interests (open text)"),
@@ -187,8 +220,10 @@ def load_profile_meta(profiles_dir: Path) -> Dict[str, Dict[str, Any]]:
                 "Regional interest": v("Regional interest"),
                 "Sector/Initiative interest": v("Sector/Initiative interest"),
                 "Specific Country Interest": v("Specific Country Interest"),
+                "Languages": v("Languages") or v("Language(s)") or v("Spoken languages"),
                 "Publication Notes": v("Publication Notes"),
                 "Web Bio": v("Web Bio"),
+                "institution": inst_str,
                 "offices": offices_fmt,
                 "initiatives": initiatives_roster,
             }.items() if val}
@@ -202,7 +237,7 @@ def load_profile_meta(profiles_dir: Path) -> Dict[str, Dict[str, Any]]:
                 "cv_url": v("CV"),
                 "web_bio_link_url": v("Web Bio Link"),
                 "key_fields": kf,
-                "institution": oa.get("institution"),
+                "institution": inst_str,
             }
         except Exception:
             continue

@@ -8,10 +8,14 @@
   let config = {
     embedApiUrl: "",
     indexUrl: "",
-    topN: 15,
+    pageSize: 30,
+    relevanceFloor: 0.12,
+    relevanceMargin: 0.1,
   };
 
   let indexData = null;
+  /** @type {{ allResults: Array<{r: object, score: number, semantic: number, boost: number, matches: object}>, page: number } | null} */
+  let searchResultsState = null;
 
   function assetUrl(relPath) {
     try {
@@ -36,20 +40,22 @@
   ]);
 
   const BOOST_WEIGHTS = {
-    "Specific Country Interest": 0.15,
-    "Regional Office Affiliation": 0.08,
-    "Research Interests (open text)": 0.06,
-    Sectors: 0.05,
+    "Specific Country Interest": 0.12,
+    "Research Interests (open text)": 0.10,
+    "Website & publications (keyword index)": 0.10,
+    institution: 0.08,
+    Sectors: 0.06,
+    "Regional Office Affiliation": 0.06,
+    Languages: 0.05,
     offices: 0.05,
-    "Regional interest": 0.05,
-    "Sector/Initiative interest": 0.05,
-    Initiatives: 0.04,
-    "Researcher Type": 0.04,
-    initiatives: 0.04,
+    "Regional interest": 0.04,
+    "Web Bio": 0.04,
     "Publication Notes": 0.03,
-    "Web Bio": 0.03,
-    "Related Initiative(s)": 0.03,
-    "Website & publications (keyword index)": 0.06,
+    Initiatives: 0.03,
+    initiatives: 0.02,
+    "Researcher Type": 0.02,
+    "Sector/Initiative interest": 0.02,
+    "Related Initiative(s)": 0.01,
   };
   const BOOST_CAP = 0.4;
 
@@ -67,6 +73,14 @@
   const apiKeyInput = document.getElementById("apiKeyInput");
   const modalKeySection = document.getElementById("modalKeySection");
   const modalProxyNote = document.getElementById("modalProxyNote");
+  const filterCountry = document.getElementById("filterCountry");
+  const filterOffice = document.getElementById("filterOffice");
+  const filterLanguage = document.getElementById("filterLanguage");
+  const filterName = document.getElementById("filterName");
+  const filterUniversity = document.getElementById("filterUniversity");
+  const filterSector = document.getElementById("filterSector");
+  const filterType = document.getElementById("filterType");
+  const resultsPager = document.getElementById("resultsPager");
 
   function getApiKey() {
     return localStorage.getItem(LS_KEY) || "";
@@ -95,7 +109,10 @@
         const j = await r.json();
         if (typeof j.embedApiUrl === "string") config.embedApiUrl = j.embedApiUrl;
         if (typeof j.indexUrl === "string") config.indexUrl = j.indexUrl;
-        if (typeof j.topN === "number" && j.topN > 0) config.topN = Math.min(50, j.topN);
+        if (typeof j.pageSize === "number" && j.pageSize > 0) config.pageSize = Math.min(100, j.pageSize);
+        if (typeof j.relevanceFloor === "number" && j.relevanceFloor >= 0) config.relevanceFloor = j.relevanceFloor;
+        if (typeof j.relevanceMargin === "number" && j.relevanceMargin >= 0) config.relevanceMargin = j.relevanceMargin;
+        if (typeof j.topN === "number" && j.topN > 0) config.pageSize = Math.min(100, j.topN);
       }
     } catch {
       /* optional file */
@@ -216,55 +233,551 @@
     return { boost: Math.min(boost, BOOST_CAP), matches };
   }
 
-  async function doSearch(e) {
-    if (e) e.preventDefault();
-    const query = queryInput.value.trim();
-    if (!query) return;
+  function normalizeNameTokens(s) {
+    return String(s || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
 
-    const apiKey = getApiKey();
-    if (!usesProxy() && !apiKey) {
-      setStatus("Add an OpenAI API key under Settings, or configure embedApiUrl in config.json.", true);
-      openModal();
+  /** CSV / semicolon: any segment may match (OR). */
+  function orListMatches(haystackLower, filterCsv) {
+    if (!filterCsv || !String(filterCsv).trim()) return true;
+    const parts = String(filterCsv)
+      .split(/[,;|]/)
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+    if (!parts.length) return true;
+    return parts.some((p) => haystackLower.includes(p));
+  }
+
+  function nameFilterMatches(researcherName, filterStr) {
+    if (!filterStr || !String(filterStr).trim()) return true;
+    const n = normalizeNameTokens(researcherName);
+    const tokens = normalizeNameTokens(filterStr)
+      .split(/\s+/)
+      .filter((t) => t.length > 0);
+    if (!tokens.length) return true;
+    return tokens.every((t) => n.includes(t));
+  }
+
+  function readManualFilters() {
+    const g = (el) => (el && el.value ? el.value.trim() : "");
+    return {
+      country: g(filterCountry),
+      office: g(filterOffice),
+      language: g(filterLanguage),
+      name: g(filterName),
+      university: g(filterUniversity),
+      sector: g(filterSector),
+      type: g(filterType),
+    };
+  }
+
+  /**
+   * Strip key:value and key:"value" from query; return topic text + parsed filters.
+   */
+  function parseInlineFilters(raw) {
+    const filters = {
+      country: "",
+      office: "",
+      language: "",
+      name: "",
+      university: "",
+      sector: "",
+      type: "",
+    };
+    let topic = String(raw || "");
+    const re =
+      /(?:^|\s)(country|nation|office|lang|language|name|university|school|institution|sector|type)\s*:\s*("([^"]+)"|[^\s]+)/gi;
+    let m;
+    const map = {
+      country: "country",
+      nation: "country",
+      office: "office",
+      lang: "language",
+      language: "language",
+      name: "name",
+      university: "university",
+      school: "university",
+      institution: "university",
+      sector: "sector",
+      type: "type",
+    };
+    while ((m = re.exec(raw)) !== null) {
+      const key = map[m[1].toLowerCase()];
+      const val = (m[3] != null ? m[3] : m[4] || "").trim();
+      if (key && val) filters[key] = val;
+      topic = topic.replace(m[0], " ");
+    }
+    topic = topic.replace(/\s+/g, " ").trim();
+    return { topic, filters };
+  }
+
+  /** Manual filter inputs override the same key from inline query syntax. */
+  function mergeFilters(manual, parsed) {
+    return {
+      country: manual.country ? manual.country : parsed.country || "",
+      office: manual.office ? manual.office : parsed.office || "",
+      language: manual.language ? manual.language : parsed.language || "",
+      name: manual.name ? manual.name : parsed.name || "",
+      university: manual.university ? manual.university : parsed.university || "",
+      sector: manual.sector ? manual.sector : parsed.sector || "",
+      type: manual.type ? manual.type : parsed.type || "",
+    };
+  }
+
+  function anyFilterActive(f) {
+    return Boolean(f.country || f.office || f.language || f.name || f.university || f.sector || f.type);
+  }
+
+  /**
+   * Known school tokens → phrases / tokens searched in affiliation haystack.
+   * Fixes OpenAlex using full names without a standalone "mit" token, etc.
+   */
+  const INSTITUTION_QUERY_ALIASES = {
+    mit: [
+      "mit",
+      "massachusetts institute of technology",
+      "massachusetts institute",
+      "m.i.t",
+    ],
+    harvard: ["harvard university", "harvard school", "harvard college", " harvard ", "harvard business school"],
+    stanford: ["stanford university", " stanford "],
+    princeton: ["princeton university", " princeton "],
+    yale: ["yale university", " yale "],
+    columbia: ["columbia university", "columbia business school"],
+    berkeley: [
+      "university of california, berkeley",
+      "uc berkeley",
+      " ucb ",
+      "berkeley ",
+    ],
+    uchicago: ["university of chicago", " uchicago ", "u of chicago"],
+    chicago: ["university of chicago", " uchicago ", "u of chicago", "chicago booth", "booth school"],
+    duke: ["duke university", " duke "],
+    penn: ["university of pennsylvania", " upenn ", "upenn", " wharton"],
+    upenn: ["university of pennsylvania", " upenn ", "upenn", " wharton"],
+    northwestern: ["northwestern university", " northwestern "],
+    cornell: ["cornell university", " cornell "],
+    brown: ["brown university", " brown university"],
+    dartmouth: ["dartmouth college", "dartmouth university"],
+    vanderbilt: ["vanderbilt university", " vanderbilt "],
+    rice: ["rice university", " rice university"],
+    georgetown: ["georgetown university", " georgetown "],
+    cmu: ["carnegie mellon", "carnegie-mellon"],
+    carnegiemellon: ["carnegie mellon", "carnegie-mellon"],
+    notre: ["university of notre dame", "notre dame"],
+    notredame: ["university of notre dame", "notre dame"],
+    ucla: ["university of california, los angeles", "ucla"],
+    ucsd: ["university of california, san diego", "uc san diego", "ucsd"],
+    michigan: ["university of michigan", " u of michigan"],
+    wisconsin: ["university of wisconsin", " uw-madison", "uw madison"],
+    virginia: ["university of virginia", " uva ", " u.v.a."],
+    unc: ["university of north carolina", " unc chapel hill", "unc-chapel hill"],
+    jhu: ["johns hopkins", "john hopkins"],
+    hopkins: ["johns hopkins", "john hopkins"],
+    oxford: ["university of oxford", " oxford university"],
+    cambridge: ["university of cambridge", " cambridge university"],
+    lse: ["london school of economics", "l.s.e."],
+    nber: ["national bureau of economic research", " nber "],
+    iza: ["iza institute", " institute of labor economics"],
+    nyu: ["new york university", " nyu ", "nyu "],
+    bostoncollege: ["boston college", " boston college"],
+    bostonuniversity: ["boston university", " boston university"],
+  };
+
+  function haystackMatchesInstitutionAliases(hay, hayWords, aliases) {
+    for (const raw of aliases) {
+      const al = String(raw).toLowerCase().trim();
+      if (!al) continue;
+      if (!/\s/.test(al) && al.length <= 8) {
+        const tok = al.replace(/[^a-z0-9]/g, "");
+        if (tok && hayWords.includes(tok)) return true;
+      }
+      const spaced = al.replace(/[^a-z0-9]+/g, " ").trim();
+      if (spaced && hay.includes(spaced)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Match affiliation text: whole-token for unknown short words, alias expansion for known schools.
+   * querySpec: canonical key (e.g. "mit") or free-text ("notre dame", "london school").
+   */
+  function institutionQueryMatch(r, querySpec) {
+    const hay = buildUniversityHaystack(r);
+    const hayWords = hay.split(/[^a-z0-9]+/).filter(Boolean);
+    const raw = String(querySpec || "").trim().toLowerCase().replace(/\s+/g, " ");
+    if (!raw) return false;
+
+    if (INSTITUTION_QUERY_ALIASES[raw]) {
+      return haystackMatchesInstitutionAliases(hay, hayWords, INSTITUTION_QUERY_ALIASES[raw]);
+    }
+
+    const qTokens = raw.split(/\s+/).filter(Boolean);
+    if (qTokens.length === 1) {
+      const w = qTokens[0].replace(/[^a-z0-9]/g, "");
+      if (w.length < 2) return false;
+      if (INSTITUTION_QUERY_ALIASES[w]) {
+        return haystackMatchesInstitutionAliases(hay, hayWords, INSTITUTION_QUERY_ALIASES[w]);
+      }
+      if (hayWords.includes(w)) return true;
+      if (w.length >= 8) return hay.includes(w);
+      return false;
+    }
+    return hay.includes(raw);
+  }
+
+  /** Two-word prefixes that map to one institution key (avoid rest = second word of name). */
+  const INSTITUTION_TWO_WORD_PREFIX = {
+    "notre dame": "notre",
+    "new york": "nyu",
+    "boston college": "bostoncollege",
+    "boston university": "bostonuniversity",
+  };
+
+  /** First word(s) are a known institution key → restrict pool, rest is embedding/topic. */
+  function extractLeadingInstitutionKeyword(topic) {
+    const words = String(topic || "")
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+    if (!words.length) return null;
+    if (words.length >= 2) {
+      const pairRaw = `${words[0]} ${words[1]}`.toLowerCase();
+      const pair = pairRaw.replace(/[^a-z\s]/g, "").replace(/\s+/g, " ").trim();
+      const key2 = INSTITUTION_TWO_WORD_PREFIX[pair];
+      if (key2 && INSTITUTION_QUERY_ALIASES[key2]) {
+        return { key: key2, rest: words.slice(2).join(" ").trim() };
+      }
+    }
+    const first = words[0].replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+    if (!first || !(first in INSTITUTION_QUERY_ALIASES)) return null;
+    return { key: first, rest: words.slice(1).join(" ").trim() };
+  }
+
+  /** Short query that is plausibly a school / org name (not a research sentence). */
+  function looksLikeShortInstitutionQuery(topic) {
+    const t = String(topic || "").trim();
+    if (t.length < 2 || t.length > 56) return false;
+    if (/[0-9@]/.test(t)) return false;
+    const words = t.split(/\s+/).filter(Boolean);
+    if (words.length < 1 || words.length > 4) return false;
+    const generic = new Set(["university", "college", "school", "institute", "department", "faculty"]);
+    if (words.length === 1 && generic.has(words[0].toLowerCase())) return false;
+    const first = words[0].replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+    if (first in INSTITUTION_QUERY_ALIASES) return true;
+    if (
+      /\b(rct|randomized|randomised|study|studies|impact|evidence|evaluation|trial|transfer|transfers)\b/i.test(
+        t
+      )
+    ) {
+      return false;
+    }
+    if (/\b(poverty|health|climate|education|economics|policy)\b/i.test(t) && words.length > 1) return false;
+    return true;
+  }
+
+  /** Heuristic: query is probably a person name (avoids embedding for "First Last"). */
+  function looksLikePersonNameQuery(s) {
+    const words = String(s || "")
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+    if (words.length < 2 || words.length > 4) return false;
+    if (/[0-9:.@/]/.test(s)) return false;
+    const small = new Set(["the", "and", "for", "in", "on", "of", "or", "to"]);
+    for (const w of words) {
+      if (w.length < 2 || small.has(w.toLowerCase())) return false;
+      if (/^[a-z]/.test(w)) return false;
+    }
+    return true;
+  }
+
+  function buildCountryHaystack(r) {
+    const kf = r.key_fields || {};
+    return `${kf["Specific Country Interest"] || ""} ${kf["Regional interest"] || ""}`.toLowerCase();
+  }
+
+  function buildOfficeHaystack(r) {
+    const kf = r.key_fields || {};
+    return `${kf.offices || ""} ${kf["Regional Office Affiliation"] || ""}`.toLowerCase();
+  }
+
+  function buildLanguageHaystack(r) {
+    const kf = r.key_fields || {};
+    return `${kf.Languages || ""} ${kf["Web Bio"] || ""} ${kf["Research Interests (open text)"] || ""} ${
+      kf["Website & publications (keyword index)"] || ""
+    }`.toLowerCase();
+  }
+
+  function buildUniversityHaystack(r) {
+    const kf = r.key_fields || {};
+    return `${r.institution || ""} ${kf.institution || ""} ${kf["Web Bio"] || ""} ${
+      kf["Research Interests (open text)"] || ""
+    } ${kf["Website & publications (keyword index)"] || ""}`.toLowerCase();
+  }
+
+  function buildSectorHaystack(r) {
+    const kf = r.key_fields || {};
+    return `${kf.Sectors || ""} ${kf["Sector/Initiative interest"] || ""} ${
+      kf["Research Interests (open text)"] || ""
+    }`.toLowerCase();
+  }
+
+  function buildTypeHaystack(r) {
+    const kf = r.key_fields || {};
+    return (kf["Researcher Type"] || "").toLowerCase();
+  }
+
+  function researcherPassesFilters(r, f) {
+    if (!orListMatches(buildCountryHaystack(r), f.country)) return false;
+    if (!orListMatches(buildOfficeHaystack(r), f.office)) return false;
+    if (!orListMatches(buildLanguageHaystack(r), f.language)) return false;
+    if (!nameFilterMatches(r.name || r.slug, f.name)) return false;
+    if (!orListMatches(buildUniversityHaystack(r), f.university)) return false;
+    if (!orListMatches(buildSectorHaystack(r), f.sector)) return false;
+    if (!orListMatches(buildTypeHaystack(r), f.type)) return false;
+    return true;
+  }
+
+  /**
+   * Adaptive result selection using median + natural-gap detection.
+   * Broad topics keep a wide set; narrow queries with a clear leader cut off early.
+   */
+  function selectRelevantScores(sortedDesc) {
+    if (!sortedDesc.length) return [];
+    const n = sortedDesc.length;
+    const best = sortedDesc[0].score;
+    const floor = config.relevanceFloor;
+
+    const median = sortedDesc[Math.floor(n / 2)].score;
+    const midpoint = (best + median) / 2;
+    const gap = best - median;
+
+    let cutoff;
+    if (gap < 0.04) {
+      cutoff = Math.max(floor, median - 0.02);
+    } else {
+      cutoff = Math.max(floor, midpoint);
+    }
+
+    let out = sortedDesc.filter((x) => x.score >= cutoff);
+
+    for (let i = 1; i < out.length; i++) {
+      const drop = out[i - 1].score - out[i].score;
+      if (drop > gap * 0.6 && drop > 0.03 && i >= 3) {
+        out = out.slice(0, i);
+        break;
+      }
+    }
+
+    if (out.length === 0) {
+      out = sortedDesc.filter((x) => x.score >= Math.max(0.05, best - 0.22));
+    }
+    if (out.length === 0) out = sortedDesc.slice(0, 1);
+    return out;
+  }
+
+  function renderResultsPage() {
+    if (!searchResultsState) return;
+    const { allResults, page } = searchResultsState;
+    const pageSize = config.pageSize;
+    const start = (page - 1) * pageSize;
+    const slice = allResults.slice(start, start + pageSize);
+    resultsContainer.innerHTML = "";
+    slice.forEach((item, i) => renderCard(item, start + i + 1));
+    renderPager();
+  }
+
+  function renderPager() {
+    if (!resultsPager || !searchResultsState) return;
+    const { allResults, page } = searchResultsState;
+    const pageSize = config.pageSize;
+    const total = allResults.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    if (totalPages <= 1) {
+      resultsPager.hidden = true;
+      resultsPager.innerHTML = "";
       return;
     }
+    resultsPager.hidden = false;
+    const mkBtn = (label, p, cur, disabled) =>
+      `<button type="button" class="pager-btn${cur ? " is-current" : ""}" data-page="${p}"${
+        disabled ? " disabled" : ""
+      }>${label}</button>`;
+    const parts = [];
+    parts.push(mkBtn("Prev", page - 1, false, page <= 1));
+    const windowSize = 5;
+    let from = Math.max(1, page - Math.floor(windowSize / 2));
+    let to = Math.min(totalPages, from + windowSize - 1);
+    if (to - from < windowSize - 1) from = Math.max(1, to - windowSize + 1);
+    if (from > 1) {
+      parts.push(mkBtn("1", 1, page === 1, false));
+      if (from > 2) parts.push('<span class="pager-ellipsis">…</span>');
+    }
+    for (let p = from; p <= to; p++) {
+      parts.push(mkBtn(String(p), p, p === page, false));
+    }
+    if (to < totalPages) {
+      if (to < totalPages - 1) parts.push('<span class="pager-ellipsis">…</span>');
+      parts.push(mkBtn(String(totalPages), totalPages, page === totalPages, false));
+    }
+    parts.push(mkBtn("Next", page + 1, false, page >= totalPages));
+    resultsPager.innerHTML = `<div class="pager-inner">${parts.join("")}</div>`;
+  }
+
+  if (resultsPager) {
+    resultsPager.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-page]");
+      if (!btn || !searchResultsState) return;
+      const p = parseInt(btn.getAttribute("data-page"), 10);
+      if (Number.isNaN(p) || p < 1) return;
+      const totalPages = Math.max(
+        1,
+        Math.ceil(searchResultsState.allResults.length / config.pageSize)
+      );
+      if (p > totalPages) return;
+      searchResultsState.page = p;
+      renderResultsPage();
+      const main = document.getElementById("main");
+      if (main) main.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
+  async function doSearch(e) {
+    if (e) e.preventDefault();
+    const rawQuery = queryInput.value.trim();
+    const manual = readManualFilters();
+    const parsed = parseInlineFilters(rawQuery);
+    const filters = mergeFilters(manual, parsed.filters);
+    const topic = parsed.topic;
+
+    if (!topic && !anyFilterActive(filters)) {
+      setStatus("Enter a topic, a name, or at least one filter (country, office, language, or university).", true);
+      return;
+    }
+
+    const apiKey = getApiKey();
 
     searchBtn.disabled = true;
     resultsContainer.innerHTML = "";
     resultsMeta.textContent = "";
+    if (resultsPager) {
+      resultsPager.hidden = true;
+      resultsPager.innerHTML = "";
+    }
+    searchResultsState = null;
 
     try {
       const idx = await loadIndex();
       const model = idx.model || "text-embedding-3-small";
-      const n = config.topN;
+      let pool = idx.researchers.filter((r) => researcherPassesFilters(r, filters));
+      let embedTopic = topic;
+      let needsEmbedding = Boolean(topic && topic.trim());
+      if (
+        topic &&
+        !anyFilterActive(filters) &&
+        looksLikePersonNameQuery(topic)
+      ) {
+        const nameHits = idx.researchers.filter((r) =>
+          nameFilterMatches(r.name || r.slug, topic)
+        );
+        if (nameHits.length > 0) {
+          pool = nameHits;
+          needsEmbedding = false;
+          embedTopic = "";
+        }
+      } else if (topic) {
+        const lead = extractLeadingInstitutionKeyword(topic);
+        if (lead) {
+          const uniHits = pool.filter((r) => institutionQueryMatch(r, lead.key));
+          if (uniHits.length > 0) {
+            pool = uniHits;
+            embedTopic = lead.rest;
+            needsEmbedding = Boolean(embedTopic && embedTopic.trim());
+          }
+        } else if (looksLikeShortInstitutionQuery(topic)) {
+          const uniHits = pool.filter((r) => institutionQueryMatch(r, topic));
+          if (uniHits.length > 0) {
+            pool = uniHits;
+            needsEmbedding = false;
+            embedTopic = "";
+          }
+        }
+      }
 
-      setStatusHTML('<span class="spinner"></span> Embedding query…');
-      const queryEmb = await embedQuery(query, model, apiKey);
+      if (needsEmbedding && !usesProxy() && !apiKey) {
+        setStatus("Add an OpenAI API key under Settings, or configure embedApiUrl in config.json.", true);
+        openModal();
+        searchBtn.disabled = false;
+        return;
+      }
+
+      if (pool.length === 0) {
+        setStatus("No researchers match your filters. Try broadening country, office, or name.", false);
+        resultsMeta.textContent = "0 matches";
+        searchBtn.disabled = false;
+        return;
+      }
+
+      let queryEmb = null;
+      if (needsEmbedding) {
+        setStatusHTML('<span class="spinner"></span> Embedding query…');
+        queryEmb = await embedQuery(embedTopic, model, apiKey);
+      }
 
       setStatusHTML(
-        `<span class="spinner"></span> Ranking ${idx.researchers.length.toLocaleString()} researchers…`
+        `<span class="spinner"></span> Scoring ${pool.length.toLocaleString()} researchers…`
       );
 
-      const terms = extractTerms(query);
-      // Rank by max(cos q·full, cos q·narrative); narrative = website+profile+CV only (no papers).
-      const scored = idx.researchers.map((r) => {
-        let semantic = cosine(queryEmb, r.embedding);
-        const nar = r.embedding_narrative;
-        if (nar && nar.length === r.embedding.length) {
-          semantic = Math.max(semantic, cosine(queryEmb, nar));
+      const terms = extractTerms(embedTopic || topic);
+      const scored = pool.map((r) => {
+        let semantic = 0;
+        if (queryEmb) {
+          semantic = cosine(queryEmb, r.embedding);
+          const nar = r.embedding_narrative;
+          if (nar && nar.length === r.embedding.length) {
+            semantic = Math.max(semantic, cosine(queryEmb, nar));
+          }
         }
         const { boost, matches } = keywordBoost(r, terms);
         return { r, score: semantic + boost, semantic, boost, matches };
       });
 
       scored.sort((a, b) => b.score - a.score);
-      const top = scored.slice(0, n);
+
+      let chosen;
+      if (needsEmbedding) {
+        chosen = selectRelevantScores(scored);
+      } else {
+        chosen = scored.slice().sort((a, b) => {
+          const an = (a.r.name || a.r.slug || "").toLowerCase();
+          const bn = (b.r.name || b.r.slug || "").toLowerCase();
+          return an.localeCompare(bn);
+        });
+      }
+
+      searchResultsState = { allResults: chosen, page: 1 };
+      const labelParts = [];
+      if (topic) labelParts.push(`“${topic}”`);
+      if (filters.country) labelParts.push(`country: ${filters.country}`);
+      if (filters.office) labelParts.push(`office: ${filters.office}`);
+      if (filters.language) labelParts.push(`language: ${filters.language}`);
+      if (filters.name) labelParts.push(`name: ${filters.name}`);
+      if (filters.university) labelParts.push(`university: ${filters.university}`);
+      if (filters.sector) labelParts.push(`sector: ${filters.sector}`);
+      if (filters.type) labelParts.push(`type: ${filters.type}`);
+      const label = labelParts.length ? labelParts.join(" · ") : "filters";
 
       setStatus(
-        `Ranked ${idx.researchers.length.toLocaleString()} researchers. Showing top ${top.length}.`
+        `Showing ${chosen.length.toLocaleString()} researcher${chosen.length === 1 ? "" : "s"} who match (${pool.length.toLocaleString()} after filters, of ${idx.researchers.length.toLocaleString()} total).`
       );
-      resultsMeta.textContent = `Top ${top.length} for “${query}”`;
+      resultsMeta.textContent = `${chosen.length} match${chosen.length === 1 ? "" : "es"} for ${label}`;
 
-      top.forEach((item, i) => renderCard(item, i + 1));
+      renderResultsPage();
     } catch (err) {
       setStatus(err.message || String(err), true);
       console.error(err);
@@ -413,6 +926,7 @@
     addEvidence("Regional interest", sf["Regional interest"]);
     addEvidence("Sector / initiative interest", sf["Sector/Initiative interest"]);
     addEvidence("Publication notes", sf["Publication Notes"]);
+    addEvidence("Languages", sf.Languages);
     if (sf.offices) addEvidence("J-PAL offices", sf.offices);
     if (sf.initiatives) addEvidence("Initiative roster", sf.initiatives);
 
@@ -505,7 +1019,9 @@
         <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
           <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
         </svg>
-        <p>Enter a topic, country, sector, or method (for example <em>cash transfers</em> or <em>education RCTs</em>). Results rank J-PAL affiliates and related researchers by semantic similarity to profile and publication text.</p>
+        <p>Enter a topic, a researcher name (e.g. <em>Esther Duflo</em>), or use the refine panel.
+        Inline filters: <code>country:</code> <code>office:</code> <code>language:</code> <code>university:</code> <code>sector:</code> <code>type:</code>.
+        All matching researchers are shown, ranked and paginated.</p>
       </div>`;
   }
 
