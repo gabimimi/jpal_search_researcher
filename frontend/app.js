@@ -689,11 +689,7 @@
       let pool = idx.researchers.filter((r) => researcherPassesFilters(r, filters));
       let embedTopic = topic;
       let needsEmbedding = Boolean(topic && topic.trim());
-      if (
-        topic &&
-        !anyFilterActive(filters) &&
-        looksLikePersonNameQuery(topic)
-      ) {
+      if (topic && !anyFilterActive(filters) && looksLikePersonNameQuery(topic)) {
         const nameHits = idx.researchers.filter((r) =>
           nameFilterMatches(r.name || r.slug, topic)
         );
@@ -702,7 +698,9 @@
           needsEmbedding = false;
           embedTopic = "";
         }
-      } else if (topic) {
+      }
+
+      if (topic && needsEmbedding) {
         const lead = extractLeadingInstitutionKeyword(topic);
         if (lead) {
           const uniHits = pool.filter((r) => institutionQueryMatch(r, lead.key));
