@@ -130,7 +130,7 @@
     if (indexData) return indexData;
     setStatusHTML('<span class="spinner"></span> Loading researcher index…');
     const url = indexUrl();
-    const resp = await fetch(url);
+    const resp = await fetch(url, { cache: "no-cache" });
     if (!resp.ok) {
       throw new Error(`Could not load index (${resp.status}). Check paths and config.json indexUrl.`);
     }
@@ -343,6 +343,11 @@
       "massachusetts institute",
       "m.i.t",
     ],
+    massachusetts: [
+      "massachusetts institute of technology",
+      "mit",
+      "m.i.t",
+    ],
     harvard: ["harvard university", "harvard school", "harvard college", " harvard ", "harvard business school"],
     stanford: ["stanford university", " stanford "],
     princeton: ["princeton university", " princeton "],
@@ -407,7 +412,7 @@
    * querySpec: canonical key (e.g. "mit") or free-text ("notre dame", "london school").
    */
   function institutionQueryMatch(r, querySpec) {
-    const hay = buildUniversityHaystack(r);
+    const hay = buildInstitutionHaystack(r);
     const hayWords = hay.split(/[^a-z0-9]+/).filter(Boolean);
     const raw = String(querySpec || "").trim().toLowerCase().replace(/\s+/g, " ");
     if (!raw) return false;
@@ -513,11 +518,18 @@
     }`.toLowerCase();
   }
 
+  /** Tight haystack: only the actual institutional affiliation. Used by institutionQueryMatch. */
+  function buildInstitutionHaystack(r) {
+    const kf = r.key_fields || {};
+    return `${r.institution || ""} ${kf.institution || ""}`.toLowerCase();
+  }
+
+  /** Broader haystack for the manual university filter — includes bio but NOT the full keyword blob. */
   function buildUniversityHaystack(r) {
     const kf = r.key_fields || {};
     return `${r.institution || ""} ${kf.institution || ""} ${kf["Web Bio"] || ""} ${
       kf["Research Interests (open text)"] || ""
-    } ${kf["Website & publications (keyword index)"] || ""}`.toLowerCase();
+    }`.toLowerCase();
   }
 
   function buildSectorHaystack(r) {
