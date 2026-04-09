@@ -1,8 +1,12 @@
 # Researcher Search Pipeline
 # ─────────────────────────────────────────────────────────────────────────────
 # Prerequisites:
-#   pip install openai numpy
+#   pip install -r requirements.txt
 #   export OPENAI_API_KEY=sk-...
+#
+# Refresh researchers from Salesforce (two Tabular reports → output/researchers_clean.csv):
+#   Set Salesforce env vars, then:  make fetch-sf
+#   Initiative sheet still from local Excel:  python3 -m src.ingest.extra_sheet
 #
 # Run the full pipeline:
 #   make all
@@ -15,7 +19,7 @@
 PYTHON := python3
 INDEX_DIR := output/index
 
-.PHONY: all build embed search clean-index serve-frontend help
+.PHONY: all build embed search clean-index serve-frontend fetch-sf help
 
 all: build embed
 	@echo ""
@@ -57,6 +61,10 @@ clean-index:
 	      $(INDEX_DIR)/embed_meta.json \
 	      $(INDEX_DIR)/documents_summary.txt
 
+## Pull affiliates + invited reports from Salesforce → output/researchers_clean.csv
+fetch-sf:
+	$(PYTHON) -m src.ingest.fetch_salesforce_researchers
+
 ## Preview static UI (http://127.0.0.1:8080/frontend/)
 serve-frontend:
 	@echo "Open http://127.0.0.1:8080/frontend/"
@@ -65,6 +73,7 @@ serve-frontend:
 help:
 	@echo "Researcher Search Pipeline"
 	@echo ""
+	@echo "  make fetch-sf                     Salesforce → researchers_clean.csv (needs .env)"
 	@echo "  make serve-frontend               Local HTTP server (visit /frontend/)"
 	@echo "  make build                        Build chunks from profiles"
 	@echo "  make embed                        Embed chunks (OpenAI, resumes)"

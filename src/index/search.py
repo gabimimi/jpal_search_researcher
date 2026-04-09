@@ -37,12 +37,12 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def _load_dotenv_project_root() -> None:
-    """Set os.environ from project .env if vars are not already set (no extra deps)."""
+    """Set os.environ from project .env if vars are unset or empty in the shell (no extra deps)."""
     path = _PROJECT_ROOT / ".env"
     if not path.is_file():
         return
     try:
-        for raw in path.read_text(encoding="utf-8").splitlines():
+        for raw in path.read_text(encoding="utf-8-sig").splitlines():
             line = raw.strip()
             if not line or line.startswith("#"):
                 continue
@@ -50,8 +50,10 @@ def _load_dotenv_project_root() -> None:
                 continue
             key, _, val = line.partition("=")
             key = key.strip()
+            if key.lower().startswith("export "):
+                key = key[7:].strip()
             val = val.strip().strip('"').strip("'")
-            if key and key not in os.environ:
+            if key and val and (key not in os.environ or not str(os.environ.get(key, "")).strip()):
                 os.environ[key] = val
     except OSError:
         pass
@@ -71,8 +73,15 @@ KEYWORD_BOOST_WEIGHTS: Dict[str, float] = {
     "Regional Office Affiliation":      0.08,
     "Research Interests (open text)":   0.06,
     "Sectors":                          0.05,
+    "offices":                          0.05,  # J-PAL office roster (extra sheet)
+    "Regional interest":                0.05,
+    "Sector/Initiative interest":       0.05,
     "Initiatives":                      0.04,
+    "Researcher Type":                  0.04,  # affiliate / invited (Salesforce)
+    "initiatives":                      0.04,  # initiative memberships (extra sheet)
+    "Publication Notes":                0.03,
     "Web Bio":                          0.03,
+    "Related Initiative(s)":            0.03,
     # Website scrape + OpenAlex titles (not in spreadsheet) — fixes “only Kenya matches”
     "Website & publications (keyword index)": 0.06,
 }

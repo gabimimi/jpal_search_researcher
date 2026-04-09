@@ -20,6 +20,7 @@ Run:
 """
 from __future__ import annotations
 
+import ast
 import json
 import math
 import random
@@ -140,6 +141,24 @@ def _weighted_type_mean_for_slug(
     return [x / wsum for x in combined]
 
 
+def _normalize_sheet_list_cell(val: Any) -> Optional[str]:
+    """Turn extra-sheet list cells like \"['J-PAL North America']\" into readable text."""
+    if val is None:
+        return None
+    s = str(val).strip()
+    if not s or s.lower() in {"nan", "none", "[]"}:
+        return None
+    if s.startswith("[") and s.endswith("]"):
+        try:
+            parsed = ast.literal_eval(s)
+            if isinstance(parsed, (list, tuple)):
+                parts = [str(x).strip() for x in parsed if str(x).strip()]
+                return "; ".join(parts) if parts else None
+        except (ValueError, SyntaxError, TypeError):
+            pass
+    return s
+
+
 def load_profile_meta(profiles_dir: Path) -> Dict[str, Dict[str, Any]]:
     meta: Dict[str, Dict[str, Any]] = {}
     for p in profiles_dir.glob("*.json"):
@@ -156,13 +175,22 @@ def load_profile_meta(profiles_dir: Path) -> Dict[str, Dict[str, Any]]:
                     return str(val).strip()
                 return None
 
+            offices_fmt = _normalize_sheet_list_cell(sf.get("offices"))
+            initiatives_roster = _normalize_sheet_list_cell(sf.get("initiatives"))
+
             kf = {k: val for k, val in {
+                "Researcher Type": v("Researcher Type"),
                 "Research Interests (open text)": v("Research Interests (open text)"),
                 "Sectors": v("Sectors"),
                 "Initiatives": v("Initiatives") or v("Related Initiative(s)"),
                 "Regional Office Affiliation": v("Regional Office Affiliation"),
+                "Regional interest": v("Regional interest"),
+                "Sector/Initiative interest": v("Sector/Initiative interest"),
                 "Specific Country Interest": v("Specific Country Interest"),
+                "Publication Notes": v("Publication Notes"),
                 "Web Bio": v("Web Bio"),
+                "offices": offices_fmt,
+                "initiatives": initiatives_roster,
             }.items() if val}
             blob = keyword_search_blob_from_profile(profile)
             if blob.strip():
@@ -170,6 +198,9 @@ def load_profile_meta(profiles_dir: Path) -> Dict[str, Dict[str, Any]]:
             meta[slug] = {
                 "name": profile.get("name") or slug,
                 "website_url": web.get("url") or web.get("final_url"),
+                "personal_page_url": v("Personal Website"),
+                "cv_url": v("CV"),
+                "web_bio_link_url": v("Web Bio Link"),
                 "key_fields": kf,
                 "institution": oa.get("institution"),
             }
@@ -249,6 +280,9 @@ def main() -> None:
             "name": meta.get("name") or slug,
             "embedding": rounded,
             "website_url": meta.get("website_url"),
+            "personal_page_url": meta.get("personal_page_url"),
+            "cv_url": meta.get("cv_url"),
+            "web_bio_link_url": meta.get("web_bio_link_url"),
             "institution": meta.get("institution"),
             "key_fields": meta.get("key_fields", {}),
         }

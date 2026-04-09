@@ -40,8 +40,15 @@
     "Regional Office Affiliation": 0.08,
     "Research Interests (open text)": 0.06,
     Sectors: 0.05,
+    offices: 0.05,
+    "Regional interest": 0.05,
+    "Sector/Initiative interest": 0.05,
     Initiatives: 0.04,
+    "Researcher Type": 0.04,
+    initiatives: 0.04,
+    "Publication Notes": 0.03,
     "Web Bio": 0.03,
+    "Related Initiative(s)": 0.03,
     "Website & publications (keyword index)": 0.06,
   };
   const BOOST_CAP = 0.4;
@@ -273,15 +280,73 @@
 
     const sf = r.key_fields || {};
     const name = r.name || r.slug;
-    const nameHtml = r.website_url
+    const site = ((r.website_url || "") + "").trim();
+    const personal = ((r.personal_page_url || "") + "").trim();
+    const nameHref = site || personal;
+    const nameHtml = nameHref
       ? `<a class="card-name" href="${escAttr(
-          r.website_url
+          nameHref
         )}" target="_blank" rel="noopener noreferrer">${escHtml(name)}</a>`
       : `<span class="card-name">${escHtml(name)}</span>`;
 
+    let typeHtml = "";
+    const rt = ((sf["Researcher Type"] || "") + "").trim();
+    if (rt) {
+      const types = rt
+        .split(";")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      typeHtml = `<div class="card-types" role="list">${types
+        .map((t) => {
+          const invited = t.toLowerCase().includes("invited");
+          const cls = invited
+            ? "card-type-badge card-type-badge--invited"
+            : "card-type-badge card-type-badge--affiliate";
+          return `<span class="${cls}" role="listitem">${escHtml(t)}</span>`;
+        })
+        .join("")}</div>`;
+    }
+
     const institution = r.institution
-      ? `<div class="card-institution">${escHtml(r.institution)}</div>`
+      ? `<div class="card-institution" title="Affiliation from publication index">${escHtml(
+          r.institution
+        )}</div>`
       : "";
+
+    let metaLines = "";
+    if (sf.offices) {
+      metaLines += `<div class="card-detail-line"><span class="card-detail-label">J-PAL offices</span> ${escHtml(
+        sf.offices
+      )}</div>`;
+    }
+    if (sf.initiatives) {
+      metaLines += `<div class="card-detail-line"><span class="card-detail-label">Initiative roster</span> ${escHtml(
+        truncate(sf.initiatives, 200)
+      )}</div>`;
+    }
+
+    const usedHrefs = new Set();
+    if (nameHref) usedHrefs.add(nameHref);
+    const linkPieces = [];
+    const pushLink = (href, label) => {
+      const h = ((href || "") + "").trim();
+      if (!h || usedHrefs.has(h)) return;
+      usedHrefs.add(h);
+      linkPieces.push(
+        `<a class="card-link" href="${escAttr(h)}" target="_blank" rel="noopener noreferrer">${escHtml(
+          label
+        )}</a>`
+      );
+    };
+    pushLink(r.cv_url, "CV");
+    pushLink(r.web_bio_link_url, "Web bio");
+    if (site && personal && site !== personal) {
+      if (nameHref === site) pushLink(personal, "Profile page");
+      else pushLink(site, "Website");
+    }
+    const linksHtml =
+      linkPieces.length > 0 ? `<div class="card-links">${linkPieces.join(" · ")}</div>` : "";
+
     const boostHtml =
       boost > 0.001 ? `<div class="score-boost">+${boost.toFixed(3)} keyword</div>` : "";
 
@@ -337,11 +402,19 @@
       });
       evidenceHtml += `</div>`;
     }
-    if (sf["Initiatives"]) {
-      evidenceHtml += `<div class="evidence-item"><div class="evidence-label">Initiatives</div><div class="evidence-text">${escHtml(
-        sf["Initiatives"]
-      )}</div></div>`;
+    function addEvidence(label, text) {
+      const t = ((text || "") + "").trim();
+      if (!t) return;
+      evidenceHtml += `<div class="evidence-item"><div class="evidence-label">${escHtml(
+        label
+      )}</div><div class="evidence-text">${escHtml(truncate(t, 400))}</div></div>`;
     }
+    addEvidence("Initiatives", sf["Initiatives"]);
+    addEvidence("Regional interest", sf["Regional interest"]);
+    addEvidence("Sector / initiative interest", sf["Sector/Initiative interest"]);
+    addEvidence("Publication notes", sf["Publication Notes"]);
+    if (sf.offices) addEvidence("J-PAL offices", sf.offices);
+    if (sf.initiatives) addEvidence("Initiative roster", sf.initiatives);
 
     const hasEvidence = evidenceHtml.length > 0;
 
@@ -350,7 +423,10 @@
         <div class="rank-badge">${rank}</div>
         <div class="card-main">
           ${nameHtml}
+          ${typeHtml}
           ${institution}
+          ${metaLines}
+          ${linksHtml}
         </div>
         <div class="card-score">
           <div class="score-value">score ${score.toFixed(3)}</div>

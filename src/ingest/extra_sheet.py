@@ -6,7 +6,8 @@ from typing import Iterable, List, Optional
 
 import pandas as pd
 
-# Update these paths if needed
+# Local Excel only (no Salesforce report for this sheet yet).
+# Main researcher grid: use  python3 -m src.ingest.fetch_salesforce_researchers
 XLS_PATH = Path("data/Report-2026-02-19-11-34-43.xlsx")
 OUT_PATH = Path("output/researchers_extra.csv")
 

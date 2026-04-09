@@ -87,6 +87,10 @@ def _profile_text(profile: dict) -> str:
     if name:
         parts.append(f"Researcher: {name}")
 
+    rt = sf.get("Researcher Type")
+    if _nonempty(rt):
+        parts.append(f"Researcher Type: {rt}")
+
     for field in [
         "Research Interests (open text)",
         "Sectors",
