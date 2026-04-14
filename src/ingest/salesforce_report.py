@@ -38,10 +38,10 @@ def _cell_value(cell: Any) -> Any:
     if cell is None:
         return ""
     if isinstance(cell, dict):
-        if "value" in cell and cell["value"] is not None:
-            return cell["value"]
         if "label" in cell and cell["label"] is not None:
             return cell["label"]
+        if "value" in cell and cell["value"] is not None:
+            return cell["value"]
     return cell
 
 

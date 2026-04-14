@@ -306,7 +306,8 @@ main {
   font-weight: 600;
   color: var(--jpal-gray);
 }
-.filter-field input {
+.filter-field input,
+.filter-field select {
   font-family: inherit;
   font-size: 0.875rem;
   padding: 8px 10px;
@@ -314,7 +315,8 @@ main {
   border-radius: var(--radius);
   background: var(--jpal-white);
 }
-.filter-field input:focus {
+.filter-field input:focus,
+.filter-field select:focus {
   outline: 2px solid var(--jpal-teal);
   outline-offset: 1px;
 }

@@ -2,3 +2,4 @@ pandas>=2.0
 requests>=2.28
 openpyxl>=3.1
 openai>=1.0
+simple-salesforce>=1.12

@@ -36,6 +36,7 @@ EMBEDDINGS_JSONL = Path("output/index/documents_with_embeddings.jsonl")
 PROFILES_DIR = Path("output/profiles")
 OUT_FILE = Path("frontend/profiles_index.json")
 META_FILE = Path("output/index/embed_meta.json")
+TOPICS_FILE = Path("output/openalex/topics_by_researcher.json")
 
 FLOAT_PRECISION = 5  # decimal places — enough for cosine similarity
 
@@ -146,13 +147,13 @@ def _normalize_sheet_list_cell(val: Any) -> Optional[str]:
     if val is None:
         return None
     s = str(val).strip()
-    if not s or s.lower() in {"nan", "none", "[]"}:
+    if not s or s.lower() in {"nan", "none", "[]", "-"}:
         return None
     if s.startswith("[") and s.endswith("]"):
         try:
             parsed = ast.literal_eval(s)
             if isinstance(parsed, (list, tuple)):
-                parts = [str(x).strip() for x in parsed if str(x).strip()]
+                parts = [str(x).strip() for x in parsed if str(x).strip() and str(x).strip() != "-"]
                 return "; ".join(parts) if parts else None
         except (ValueError, SyntaxError, TypeError):
             pass
@@ -190,7 +191,17 @@ def _infer_institution(profile: dict) -> Optional[str]:
     return best
 
 
+def _load_topics_map() -> Dict[str, Dict[str, Any]]:
+    if not TOPICS_FILE.exists():
+        return {}
+    try:
+        return json.loads(TOPICS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
 def load_profile_meta(profiles_dir: Path) -> Dict[str, Dict[str, Any]]:
+    topics_map = _load_topics_map()
     meta: Dict[str, Dict[str, Any]] = {}
     for p in profiles_dir.glob("*.json"):
         try:
@@ -201,18 +212,23 @@ def load_profile_meta(profiles_dir: Path) -> Dict[str, Dict[str, Any]]:
             web = profile.get("website") or {}
 
             def v(field: str) -> Optional[str]:
+                """Get field value, normalizing Python list strings to semicolon-separated text."""
                 val = sf.get(field)
-                if val and str(val).strip() not in {"", "nan", "None", "NaN"}:
-                    return str(val).strip()
-                return None
+                return _normalize_sheet_list_cell(val)
 
             offices_fmt = _normalize_sheet_list_cell(sf.get("offices"))
             initiatives_roster = _normalize_sheet_list_cell(sf.get("initiatives"))
 
             inst_str = _infer_institution(profile)
 
+            raw_type = v("Researcher Type")
+            if raw_type and "invited" in raw_type.lower():
+                researcher_type = "Invited researcher"
+            else:
+                researcher_type = "J-PAL affiliate"
+
             kf = {k: val for k, val in {
-                "Researcher Type": v("Researcher Type"),
+                "Researcher Type": researcher_type,
                 "Research Interests (open text)": v("Research Interests (open text)"),
                 "Sectors": v("Sectors"),
                 "Initiatives": v("Initiatives") or v("Related Initiative(s)"),
@@ -227,6 +243,24 @@ def load_profile_meta(profiles_dir: Path) -> Dict[str, Dict[str, Any]]:
                 "offices": offices_fmt,
                 "initiatives": initiatives_roster,
             }.items() if val}
+
+            enriched = topics_map.get(slug, {})
+            oa_topics = enriched.get("openalex_topics", [])
+            if oa_topics:
+                kf["OpenAlex Topics"] = "; ".join(oa_topics)
+            top_papers = enriched.get("top_papers", [])
+            if top_papers:
+                kf["Top Cited Papers"] = "; ".join(top_papers)
+            top_venues = enriched.get("top_venues", [])
+            if top_venues:
+                kf["Top Journals"] = "; ".join(top_venues)
+            total_works = enriched.get("total_works")
+            if total_works:
+                kf["OpenAlex Works Count"] = str(total_works)
+            total_citations = enriched.get("total_citations")
+            if total_citations:
+                kf["OpenAlex Total Citations"] = str(total_citations)
+
             blob = keyword_search_blob_from_profile(profile)
             if blob.strip():
                 kf[KEYWORD_INDEX_FIELD] = blob

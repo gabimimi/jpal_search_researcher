@@ -39,6 +39,42 @@
     "experiments", "evidence", "impact", "effect", "effects", "using", "use",
   ]);
 
+  const SEARCH_SYNONYMS = {
+    "lac": ["latin america", "caribbean", "latin america and the caribbean"],
+    "latin america": ["lac", "caribbean", "latin america and the caribbean"],
+    "caribbean": ["lac", "latin america", "latin america and the caribbean"],
+    "sa": ["south asia"],
+    "south asia": ["sa"],
+    "sea": ["southeast asia"],
+    "southeast asia": ["sea"],
+    "na": ["north america"],
+    "north america": ["na"],
+    "ssa": ["sub-saharan africa", "africa"],
+    "sub-saharan africa": ["ssa", "africa"],
+    "africa": ["ssa", "sub-saharan africa"],
+    "mena": ["middle east", "north africa"],
+    "k-12": ["education", "primary", "secondary", "schooling"],
+    "k12": ["education", "primary", "secondary", "schooling"],
+    "rct": ["randomized", "randomised", "experiment"],
+    "ccm": ["conditional cash", "cash transfer"],
+    "cct": ["conditional cash transfer", "cash transfer"],
+    "ai": ["artificial intelligence", "machine learning"],
+    "ml": ["machine learning", "artificial intelligence"],
+    "ict": ["information and communication technology", "digital", "technology"],
+    "wash": ["water", "sanitation", "hygiene"],
+    "msme": ["micro small medium enterprise", "small business"],
+    "sme": ["small medium enterprise", "small business"],
+    "ngo": ["non-governmental organization", "nonprofit"],
+    "govt": ["government", "governance"],
+    "gov": ["government", "governance"],
+    "edu": ["education"],
+    "ag": ["agriculture", "agricultural"],
+    "agri": ["agriculture", "agricultural"],
+    "env": ["environment", "environmental", "climate"],
+    "health": ["healthcare", "public health"],
+    "gender": ["women", "girls", "female"],
+  };
+
   const BOOST_WEIGHTS = {
     "Specific Country Interest": 0.12,
     "Research Interests (open text)": 0.10,
@@ -207,14 +243,23 @@
   }
 
   function extractTerms(query) {
-    const m = query.toLowerCase().match(/[a-zA-Z]{3,}/g);
+    const lower = query.toLowerCase();
+    const m = lower.match(/[a-zA-Z0-9-]{2,}/g);
     const words = m ? m.filter((w) => !STOP.has(w)) : [];
-    // “RCT” rarely appears in prose; match “randomized” / “randomised” too.
-    if (words.includes("rct")) {
-      if (!words.includes("randomized")) words.push("randomized");
-      if (!words.includes("randomised")) words.push("randomised");
+    const expanded = new Set(words);
+    for (const w of words) {
+      const syns = SEARCH_SYNONYMS[w];
+      if (syns) syns.forEach((s) => s.split(/\s+/).forEach((t) => expanded.add(t)));
     }
-    return words;
+    const phrases = Object.keys(SEARCH_SYNONYMS).filter((k) => k.includes(" "));
+    for (const phrase of phrases) {
+      if (lower.includes(phrase)) {
+        const syns = SEARCH_SYNONYMS[phrase];
+        if (syns) syns.forEach((s) => s.split(/\s+/).forEach((t) => expanded.add(t)));
+      }
+    }
+    expanded.forEach((t) => { if (STOP.has(t)) expanded.delete(t); });
+    return [...expanded];
   }
 
   function keywordBoost(researcher, terms) {
@@ -874,8 +919,6 @@
     const linksHtml =
       linkPieces.length > 0 ? `<div class="card-links">${linkPieces.join(" · ")}</div>` : "";
 
-    const boostHtml =
-      boost > 0.001 ? `<div class="score-boost">+${boost.toFixed(3)} keyword</div>` : "";
 
     let tagsHtml = "";
     if (sf["Sectors"]) {
@@ -883,7 +926,6 @@
         .split(";")
         .map((s) => s.trim())
         .filter(Boolean)
-        .slice(0, 4)
         .forEach((s) => {
           tagsHtml += `<span class="tag tag-sector">${escHtml(s)}</span>`;
         });
@@ -893,7 +935,6 @@
         .split(";")
         .map((s) => s.trim())
         .filter(Boolean)
-        .slice(0, 3)
         .forEach((s) => {
           tagsHtml += `<span class="tag tag-country">${escHtml(s)}</span>`;
         });
@@ -903,14 +944,9 @@
         .split(";")
         .map((s) => s.trim())
         .filter(Boolean)
-        .slice(0, 2)
         .forEach((s) => {
           tagsHtml += `<span class="tag tag-region">${escHtml(s)}</span>`;
         });
-    }
-    if (Object.keys(matches).length) {
-      const allHits = [...new Set(Object.values(matches).flat())];
-      tagsHtml += `<span class="tag tag-boost">matched: ${escHtml(allHits.join(", "))}</span>`;
     }
 
     const bioText = sf["Research Interests (open text)"] || sf["Web Bio"] || "";
@@ -957,8 +993,6 @@
           ${linksHtml}
         </div>
         <div class="card-score">
-          <div class="score-value">score ${score.toFixed(3)}</div>
-          ${boostHtml}
         </div>
       </div>
       ${tagsHtml ? `<div class="tags">${tagsHtml}</div>` : ""}
@@ -1043,16 +1077,29 @@
 
   const EXPORT_COLUMNS = [
     { key: "rank", label: "Rank" },
-    { key: "name", label: "Name" },
-    { key: "institution", label: "Institution" },
+    { key: "name", label: "Full Name" },
     { key: "type", label: "Researcher Type" },
-    { key: "country", label: "Country Interest" },
+    { key: "institution", label: "Institution (OpenAlex)" },
+    { key: "website", label: "Personal Website" },
+    { key: "cv", label: "CV" },
+    { key: "webBioLink", label: "Web Bio Link" },
+    { key: "webBio", label: "Web Bio" },
+    { key: "interests", label: "Research Interests (open text)" },
+    { key: "regionalOffice", label: "Regional Office Affiliation" },
+    { key: "regionalInterest", label: "Regional interest" },
     { key: "sectors", label: "Sectors" },
+    { key: "sectorInitiative", label: "Sector/Initiative interest" },
+    { key: "initiatives", label: "Initiatives" },
+    { key: "initiativeRoster", label: "Initiative Roster" },
+    { key: "publicationNotes", label: "Publication Notes" },
+    { key: "country", label: "Specific Country Interest" },
     { key: "offices", label: "J-PAL Offices" },
     { key: "languages", label: "Languages" },
-    { key: "interests", label: "Research Interests" },
-    { key: "score", label: "Score" },
-    { key: "website", label: "Website" },
+    { key: "oaTopics", label: "OpenAlex Topics" },
+    { key: "topPapers", label: "Top Cited Papers" },
+    { key: "topJournals", label: "Top Journals" },
+    { key: "worksCount", label: "OpenAlex Works Count" },
+    { key: "totalCitations", label: "OpenAlex Total Citations" },
   ];
 
   function buildExportRows() {
@@ -1063,15 +1110,28 @@
       return {
         rank: i + 1,
         name: r.name || r.slug || "",
+        type: kf["Researcher Type"] || "",
         institution: r.institution || "",
-        type: (kf["Researcher Type"] || "").replace(/;/g, ", "),
-        country: (kf["Specific Country Interest"] || "").replace(/;/g, ", "),
-        sectors: (kf.Sectors || "").replace(/;/g, ", "),
+        website: r.personal_page_url || r.website_url || "",
+        cv: r.cv_url || "",
+        webBioLink: r.web_bio_link_url || "",
+        webBio: kf["Web Bio"] || "",
+        interests: kf["Research Interests (open text)"] || "",
+        regionalOffice: kf["Regional Office Affiliation"] || "",
+        regionalInterest: kf["Regional interest"] || "",
+        sectors: kf.Sectors || "",
+        sectorInitiative: kf["Sector/Initiative interest"] || "",
+        initiatives: kf.Initiatives || "",
+        initiativeRoster: kf.initiatives || "",
+        publicationNotes: kf["Publication Notes"] || "",
+        country: kf["Specific Country Interest"] || "",
         offices: kf.offices || "",
         languages: kf.Languages || "",
-        interests: truncate(kf["Research Interests (open text)"] || "", 300),
-        score: item.score != null ? item.score.toFixed(3) : "",
-        website: r.website_url || r.personal_page_url || "",
+        oaTopics: kf["OpenAlex Topics"] || "",
+        topPapers: kf["Top Cited Papers"] || "",
+        topJournals: kf["Top Journals"] || "",
+        worksCount: kf["OpenAlex Works Count"] || "",
+        totalCitations: kf["OpenAlex Total Citations"] || "",
       };
     });
   }
@@ -1160,7 +1220,6 @@
       { key: "country", label: "Country" },
       { key: "sectors", label: "Sectors" },
       { key: "offices", label: "Offices" },
-      { key: "score", label: "Score" },
     ];
 
     const head = [pdfCols.map((c) => c.label)];
@@ -1197,13 +1256,44 @@
 
   // ── Init ──────────────────────────────────────────────────────────
 
+  function populateFilterDropdowns(idx) {
+    const collectors = {
+      filterSector: { field: "Sectors", sep: ";" },
+      filterOffice: { field: "Regional Office Affiliation", sep: ";" },
+      filterType: { field: "Researcher Type", sep: ";" },
+    };
+    for (const [elId, cfg] of Object.entries(collectors)) {
+      const el = document.getElementById(elId);
+      if (!el || el.tagName !== "SELECT") continue;
+      const vals = new Set();
+      for (const r of idx.researchers) {
+        const raw = (r.key_fields || {})[cfg.field] || "";
+        raw.split(cfg.sep).forEach((s) => {
+          const t = s.trim();
+          if (t) vals.add(t);
+        });
+      }
+      const sorted = [...vals].sort();
+      el.innerHTML = '<option value="">All</option>';
+      sorted.forEach((v) => {
+        const opt = document.createElement("option");
+        opt.value = v;
+        opt.textContent = v;
+        el.appendChild(opt);
+      });
+    }
+  }
+
   async function init() {
     showPlaceholder();
     await loadConfig();
-    setTimeout(() => {
-      loadIndex().catch((err) => {
+    setTimeout(async () => {
+      try {
+        const idx = await loadIndex();
+        populateFilterDropdowns(idx);
+      } catch (err) {
         setStatus("Could not preload index: " + err.message, true);
-      });
+      }
     }, 300);
   }
 

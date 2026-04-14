@@ -377,6 +377,18 @@ def simplify_work(w: dict[str, Any]) -> dict[str, Any]:
     source = (host.get("source") or {})
     ids = w.get("ids") or {}
 
+    topics = [
+        {"display_name": t["display_name"], "score": t.get("score"),
+         "subfield": (t.get("subfield") or {}).get("display_name"),
+         "field": (t.get("field") or {}).get("display_name"),
+         "domain": (t.get("domain") or {}).get("display_name")}
+        for t in (w.get("topics") or []) if t.get("display_name")
+    ]
+    keywords = [
+        {"display_name": k["display_name"], "score": k.get("score")}
+        for k in (w.get("keywords") or []) if k.get("display_name")
+    ]
+
     return {
         "openalex_id": w.get("id"),
         "doi": ids.get("doi"),
@@ -387,6 +399,8 @@ def simplify_work(w: dict[str, Any]) -> dict[str, Any]:
         "venue": source.get("display_name"),
         "landing_page_url": (host.get("landing_page_url") or w.get("primary_location", {}).get("landing_page_url")),
         "abstract": abstract_from_inverted_index(w.get("abstract_inverted_index")),
+        "topics": topics,
+        "keywords": keywords,
         "authorships": [
             {
                 "author_name": (a.get("author") or {}).get("display_name"),
@@ -647,5 +661,47 @@ def main() -> None:
     print(f"Summary CSV:      {summary_path}")
 
 
+def reprocess_works() -> None:
+    """Re-simplify works from cache for all matched authors (no API calls).
+
+    Useful after updating simplify_work() to extract new fields (e.g. topics).
+    """
+    author_files = sorted(AUTHORS_DIR.glob("*.json"))
+    updated = 0
+    for af in author_files:
+        try:
+            author_data = json.loads(af.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if author_data.get("status") != "matched":
+            continue
+        openalex_id = (author_data.get("best_author") or {}).get("openalex_id")
+        if not openalex_id:
+            continue
+        name = author_data.get("name", af.stem)
+        slug = safe_slug(name)
+        works_out = WORKS_DIR / f"{slug}.json"
+        try:
+            works_raw = fetch_all_works_for_author(openalex_id)
+            works_simple = [simplify_work(w) for w in works_raw]
+            works_payload = {
+                "name": name,
+                "openalex_author_id": openalex_id,
+                "works_count": len(works_simple),
+                "works": works_simple,
+            }
+            works_out.write_text(json.dumps(works_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            updated += 1
+            if updated % 50 == 0:
+                print(f"  {updated} researchers re-processed...")
+        except Exception as e:
+            print(f"[warn] {name}: {e}")
+    print(f"Done. Re-processed works for {updated} researchers.")
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "--reprocess-works":
+        reprocess_works()
+    else:
+        main()

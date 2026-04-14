@@ -56,7 +56,7 @@ def is_nonempty(x: object) -> bool:
     if isinstance(x, float) and pd.isna(x):
         return False
     s = str(x).strip()
-    return s != "" and s.lower() not in {"nan", "none", "null"}
+    return s != "" and s not in {"-"} and s.lower() not in {"nan", "none", "null"}
 
 
 def read_table(path: Path) -> pd.DataFrame:
@@ -240,38 +240,64 @@ def openalex_block(author_payload: Optional[dict[str, Any]]) -> dict[str, Any]:
 # Main build
 # =========================
 
+def _looks_like_sf_id(s: str) -> bool:
+    """Detect Salesforce record IDs (e.g. 003A000000tId1OIAS, a1MA0000009rAjk)."""
+    s = s.strip()
+    if len(s) < 15 or len(s) > 18:
+        return False
+    return bool(re.match(r'^[0-9A-Za-z]{15,18}$', s))
+
+
+def _index_by_name(df: pd.DataFrame, name_col: Optional[str]) -> Dict[str, dict[str, Any]]:
+    """Index rows by normalized Full Name, merging duplicates. Skips Salesforce IDs."""
+    idx: Dict[str, dict[str, Any]] = {}
+    skipped = 0
+    for _, row in df.iterrows():
+        rowd = {k: (None if (isinstance(v, float) and pd.isna(v)) else v) for k, v in row.to_dict().items()}
+        name_val = None
+        if name_col and is_nonempty(rowd.get(name_col)):
+            name_val = str(rowd[name_col]).strip()
+        else:
+            for col in rowd:
+                if "name" in str(col).lower() and is_nonempty(rowd.get(col)):
+                    name_val = str(rowd[col]).strip()
+                    break
+        if not name_val:
+            continue
+        if _looks_like_sf_id(name_val):
+            skipped += 1
+            continue
+        key = normalize_name(name_val)
+        if not key:
+            continue
+        if key in idx:
+            idx[key] = merge_row_dicts(idx[key], rowd)
+        else:
+            idx[key] = rowd
+    if skipped:
+        print(f"  Skipped {skipped} rows with Salesforce IDs instead of names")
+    return idx
+
+
 def main() -> None:
+    if OUT_DIR.exists():
+        for old in OUT_DIR.glob("*.json"):
+            old.unlink()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     df1 = read_table(SHEET_1_PATH)
     df2 = read_table(SHEET_2_PATH)
 
-    id1, name1 = choose_key_fields(df1)
-    id2, name2 = choose_key_fields(df2)
+    _, name1 = choose_key_fields(df1)
+    _, name2 = choose_key_fields(df2)
 
-    if name1 is None and id1 is None:
-        raise ValueError(f"Could not find a name or id column in {SHEET_1_PATH}. Columns: {list(df1.columns)}")
-    if name2 is None and id2 is None:
-        raise ValueError(f"Could not find a name or id column in {SHEET_2_PATH}. Columns: {list(df2.columns)}")
+    if name1 is None:
+        raise ValueError(f"Could not find a name column in {SHEET_1_PATH}. Columns: {list(df1.columns)}")
+    if name2 is None:
+        raise ValueError(f"Could not find a name column in {SHEET_2_PATH}. Columns: {list(df2.columns)}")
 
-    def index_table(df: pd.DataFrame, id_col: Optional[str], name_col: Optional[str]) -> Dict[str, dict[str, Any]]:
-        idx: Dict[str, dict[str, Any]] = {}
-        for _, row in df.iterrows():
-            rowd = {k: (None if (isinstance(v, float) and pd.isna(v)) else v) for k, v in row.to_dict().items()}
-            key = None
-            if id_col and is_nonempty(rowd.get(id_col)):
-                key = f"id:{str(rowd[id_col]).strip()}"
-            elif name_col and is_nonempty(rowd.get(name_col)):
-                key = f"name:{normalize_name(str(rowd[name_col]))}"
-            if key:
-                if key in idx:
-                    idx[key] = merge_row_dicts(idx[key], rowd)
-                else:
-                    idx[key] = rowd
-        return idx
-
-    idx1 = index_table(df1, id1, name1)
-    idx2 = index_table(df2, id2, name2)
+    idx1 = _index_by_name(df1, name1)
+    idx2 = _index_by_name(df2, name2)
 
     cv_recs = load_json_dir(CV_JSON_DIR)
     web_recs = load_json_dir(WEB_JSON_DIR)
@@ -279,12 +305,13 @@ def main() -> None:
     cv_by_name = {normalize_name(str(r.get("name", ""))): r for r in cv_recs if is_nonempty(r.get("name"))}
     web_by_name = {normalize_name(str(r.get("name", ""))): r for r in web_recs if is_nonempty(r.get("name"))}
 
-    all_keys = sorted(set(idx1.keys()) | set(idx2.keys()))
+    all_names = sorted(set(idx1.keys()) | set(idx2.keys()))
     if LIMIT is not None:
-        all_keys = all_keys[:LIMIT]
+        all_names = all_names[:LIMIT]
 
     stats = {
         "profiles_written": 0,
+        "duplicates_merged": 0,
         "matched_cv": 0,
         "matched_web": 0,
         "matched_openalex_author": 0,
@@ -295,9 +322,11 @@ def main() -> None:
         "web_ok": 0, "web_empty": 0, "web_error": 0, "web_missing": 0,
     }
 
-    for key in all_keys:
-        row1 = idx1.get(key, {})
-        row2 = idx2.get(key, {})
+    seen_slugs: Dict[str, str] = {}  # slug -> norm_name that claimed it
+
+    for norm_name in all_names:
+        row1 = idx1.get(norm_name, {})
+        row2 = idx2.get(norm_name, {})
         merged_row = merge_row_dicts(row1, row2)
 
         name_val = None
@@ -305,14 +334,15 @@ def main() -> None:
             name_val = str(merged_row[name1]).strip()
         elif name2 and is_nonempty(merged_row.get(name2)):
             name_val = str(merged_row[name2]).strip()
-        else:
-            for col in merged_row.keys():
-                if "name" in str(col).lower() and is_nonempty(merged_row.get(col)):
-                    name_val = str(merged_row[col]).strip()
-                    break
+        if not name_val:
+            name_val = norm_name
 
-        norm_name = normalize_name(name_val or "")
-        slug = safe_slug(name_val or key.replace(":", "-"))
+        slug = safe_slug(name_val)
+
+        if slug in seen_slugs and seen_slugs[slug] != norm_name:
+            stats["duplicates_merged"] += 1
+            continue
+        seen_slugs[slug] = norm_name
 
         cv_rec = cv_by_name.get(norm_name)
         web_rec = web_by_name.get(norm_name)
@@ -381,12 +411,12 @@ def main() -> None:
         combined_text = "\n".join(combined_parts).strip()
 
         profile = {
-            "key": key,
+            "key": norm_name,
             "name": name_val,
             "slug": slug,
             "sources": {
-                "sheet_1": {"path": str(SHEET_1_PATH), "id_col": id1, "name_col": name1},
-                "sheet_2": {"path": str(SHEET_2_PATH), "id_col": id2, "name_col": name2},
+                "sheet_1": {"path": str(SHEET_1_PATH), "name_col": name1},
+                "sheet_2": {"path": str(SHEET_2_PATH), "name_col": name2},
                 "cv_json_dir": str(CV_JSON_DIR),
                 "web_json_dir": str(WEB_JSON_DIR),
                 "openalex_authors_dir": str(OPENALEX_AUTHORS_DIR),
@@ -418,7 +448,9 @@ def main() -> None:
     lines.append(f"OA authors dir: {OPENALEX_AUTHORS_DIR} (files={len(list(OPENALEX_AUTHORS_DIR.glob('*.json')))} if exists)")
     lines.append(f"OA works dir:   {OPENALEX_WORKS_DIR} (files={len(list(OPENALEX_WORKS_DIR.glob('*.json')))} if exists)")
     lines.append("")
+    lines.append(f"Unique names:     {len(all_names)}")
     lines.append(f"Profiles written: {stats['profiles_written']}")
+    lines.append(f"Slug collisions:  {stats['duplicates_merged']}")
     lines.append("")
     lines.append("CV matching:")
     lines.append(f"  matched: {stats['matched_cv']}")

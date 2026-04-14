@@ -54,43 +54,39 @@
         <button type="submit" id="searchBtn">Search</button>
       </form>
       <details class="filter-panel">
-        <summary class="filter-panel__summary">Refine by country, office, language, name, university, sector, or type</summary>
+        <summary class="filter-panel__summary">Refine by office, sector, type, name, or university</summary>
         <div class="filter-grid" id="filterGrid">
           <label class="filter-field">
-            <span class="filter-label">Country</span>
-            <input type="text" id="filterCountry" name="filterCountry" placeholder="e.g. Kenya or Kenya, France" autocomplete="off" />
-          </label>
-          <label class="filter-field">
             <span class="filter-label">J-PAL office</span>
-            <input type="text" id="filterOffice" name="filterOffice" placeholder="e.g. North America, Global" autocomplete="off" />
+            <select id="filterOffice" name="filterOffice">
+              <option value="">All</option>
+            </select>
           </label>
           <label class="filter-field">
-            <span class="filter-label">Language</span>
-            <input type="text" id="filterLanguage" name="filterLanguage" placeholder="e.g. French, Spanish" autocomplete="off" />
+            <span class="filter-label">Sector</span>
+            <select id="filterSector" name="filterSector">
+              <option value="">All</option>
+            </select>
+          </label>
+          <label class="filter-field">
+            <span class="filter-label">Researcher type</span>
+            <select id="filterType" name="filterType">
+              <option value="">All</option>
+            </select>
           </label>
           <label class="filter-field">
             <span class="filter-label">Name contains</span>
             <input type="text" id="filterName" name="filterName" placeholder="e.g. Duflo" autocomplete="off" />
           </label>
           <label class="filter-field">
-            <span class="filter-label">Sector</span>
-            <input type="text" id="filterSector" name="filterSector" placeholder="e.g. Education, Health" autocomplete="off" />
-          </label>
-          <label class="filter-field">
-            <span class="filter-label">Researcher type</span>
-            <input type="text" id="filterType" name="filterType" placeholder="e.g. affiliate, invited" autocomplete="off" />
-          </label>
-          <label class="filter-field filter-field--wide">
             <span class="filter-label">University / organization</span>
             <input type="text" id="filterUniversity" name="filterUniversity" placeholder="e.g. MIT, World Bank" autocomplete="off" />
           </label>
         </div>
         <p class="filter-hint">
-          Filters combine with <strong>AND</strong>. In the search box you can also write
-          <code>country:Kenya</code>, <code>office:"Latin America"</code>, <code>language:French</code>,
-          <code>name:"Ada Yonath"</code>, <code>university:Oxford</code>, <code>sector:Health</code>,
-          <code>type:affiliate</code>. Manual fields above override the same key from the query text.
-          Results show <strong>everyone</strong> who matches (ranked); use pagination at the bottom when there are many.
+          Filters combine with <strong>AND</strong>. Use the dropdowns and text fields above to narrow results.
+          You can also write inline filters in the search box: <code>country:Kenya</code>, <code>name:"Ada Yonath"</code>,
+          <code>university:Oxford</code>. Results show <strong>everyone</strong> who matches (ranked); use pagination at the bottom when there are many.
         </p>
       </details>
       <div class="status-bar" id="statusBar" role="status" aria-live="polite"></div>
@@ -104,7 +100,6 @@
         <span class="export-label">Export:</span>
         <button type="button" class="export-btn" data-format="csv">CSV</button>
         <button type="button" class="export-btn" data-format="xlsx">Excel</button>
-        <button type="button" class="export-btn" data-format="pdf">PDF</button>
       </div>
     </div>
     <div id="resultsContainer"></div>
@@ -150,8 +145,6 @@
   </div>
 
   <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" defer></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js" defer></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js" defer></script>
   <script src="app.js" defer></script>
 </body>
 </html>
