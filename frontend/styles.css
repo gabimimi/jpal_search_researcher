@@ -398,21 +398,6 @@ main {
   gap: 12px;
 }
 
-.rank-badge {
-  background: var(--jpal-cream);
-  color: var(--jpal-gray);
-  font-size: 0.6875rem;
-  font-weight: 700;
-  border-radius: 50%;
-  width: 26px;
-  height: 26px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  margin-top: 2px;
-}
-
 .card-main { flex: 1; min-width: 0; }
 
 .card-name {
@@ -487,26 +472,11 @@ a.card-name:hover { color: var(--jpal-teal); text-decoration: none; }
   text-decoration: underline;
 }
 
-.card-score {
-  text-align: right;
-  flex-shrink: 0;
-}
-.score-value {
-  font-size: 0.8125rem;
-  font-weight: 600;
-  color: var(--jpal-teal);
-}
-.score-boost {
-  font-size: 0.6875rem;
-  color: var(--jpal-gray-mid);
-  margin-top: 2px;
-}
-
 .tags {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  padding: 0 18px 12px 56px;
+  padding: 0 18px 12px 18px;
 }
 .tag {
   font-size: 0.6875rem;
@@ -520,13 +490,22 @@ a.card-name:hover { color: var(--jpal-teal); text-decoration: none; }
 .tag-boost    { background: #e8f2e4; color: #2e6b2e; }
 
 .card-bio {
-  padding: 0 18px 14px 56px;
+  padding: 0 18px 14px 18px;
   font-size: 0.875rem;
   color: var(--jpal-gray);
   line-height: 1.55;
 }
 
-.evidence-toggle { padding: 0 18px 14px 56px; }
+.card-synthesis {
+  padding: 0 18px 12px 18px;
+  font-size: 0.875rem;
+  color: var(--jpal-dark);
+  line-height: 1.55;
+  font-style: italic;
+}
+.card-synthesis:empty { display: none; }
+
+.evidence-toggle { padding: 0 18px 14px 18px; }
 .toggle-btn {
   background: none;
   border: 1px solid var(--jpal-border);
@@ -543,7 +522,7 @@ a.card-name:hover { color: var(--jpal-teal); text-decoration: none; }
   display: none;
   background: var(--jpal-cream);
   border-top: 1px solid var(--jpal-border-light);
-  padding: 14px 18px 14px 56px;
+  padding: 14px 18px 14px 18px;
 }
 .evidence-panel.open { display: block; }
 .evidence-item { margin-bottom: 10px; }

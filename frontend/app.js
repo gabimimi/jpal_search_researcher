@@ -497,7 +497,6 @@
     const small = new Set(["the", "and", "for", "in", "on", "of", "or", "to"]);
     for (const w of words) {
       if (w.length < 2 || small.has(w.toLowerCase())) return false;
-      if (/^[a-z]/.test(w)) return false;
     }
     return true;
   }
@@ -581,14 +580,14 @@
 
     for (let i = 1; i < out.length; i++) {
       const drop = out[i - 1].score - out[i].score;
-      if (drop > gap * 0.6 && drop > 0.03 && i >= 3) {
+      if (drop > gap * 0.45 && drop > 0.03 && i >= 2) {
         out = out.slice(0, i);
         break;
       }
     }
 
     if (out.length === 0) {
-      out = sortedDesc.filter((x) => x.score >= Math.max(0.05, best - 0.22));
+      out = sortedDesc.filter((x) => x.score >= Math.max(floor, best - 0.22));
     }
     if (out.length === 0) out = sortedDesc.slice(0, 1);
     return out;
@@ -601,7 +600,7 @@
     const start = (page - 1) * pageSize;
     const slice = allResults.slice(start, start + pageSize);
     resultsContainer.innerHTML = "";
-    slice.forEach((item, i) => renderCard(item, start + i + 1));
+    slice.forEach((item) => renderCard(item));
     renderPager();
   }
 
@@ -691,11 +690,23 @@
       let pool = idx.researchers.filter((r) => researcherPassesFilters(r, filters));
       let embedTopic = topic;
       let needsEmbedding = Boolean(topic && topic.trim());
-      if (topic && !anyFilterActive(filters) && looksLikePersonNameQuery(topic)) {
-        const nameHits = idx.researchers.filter((r) =>
-          nameFilterMatches(r.name || r.slug, topic)
+      if (topic && !anyFilterActive(filters)) {
+        const topicWords = topic.trim().split(/\s+/).filter(Boolean);
+        const isSingleWord = topicWords.length === 1;
+        // Single-word: require the token to be an exact whole word in the researcher's name
+        // (prevents "kenya" matching "Bukenya" via substring).
+        // Multi-word: existing substring match is fine — all tokens must appear in the name.
+        const nameHits = idx.researchers.filter((r) => {
+          if (isSingleWord) {
+            const nameWords = normalizeNameTokens(r.name || r.slug).split(/\s+/).filter(Boolean);
+            return nameWords.some((w) => w === topicWords[0].toLowerCase());
+          }
+          return nameFilterMatches(r.name || r.slug, topic);
+        });
+        const useNameMatch = nameHits.length > 0 && (
+          !isSingleWord || nameHits.length <= 15
         );
-        if (nameHits.length > 0) {
+        if (useNameMatch) {
           pool = nameHits;
           needsEmbedding = false;
           embedTopic = "";
@@ -791,6 +802,11 @@
 
       renderResultsPage();
       if (exportBar) exportBar.hidden = chosen.length === 0;
+
+      // Async: fetch GPT explanations only for real semantic searches, not name/institution lookups
+      if (usesProxy() && queryEmb && chosen.length > 0) {
+        doSynthesize(embedTopic || topic, chosen.slice(0, 20));
+      }
     } catch (err) {
       setStatus(err.message || String(err), true);
       console.error(err);
@@ -801,7 +817,64 @@
     }
   }
 
-  function renderCard({ r, score, boost, matches }, rank) {
+  async function doSynthesize(query, items) {
+    const results = items.map(({ r, matches }) => {
+      const sf = r.key_fields || {};
+
+      // Extract a short snippet around the matched term(s) from the website/publications blob
+      const blob = sf["Website & publications (keyword index)"] || "";
+      let website_snippet = "";
+      const blobTerms = (matches || {})["Website & publications (keyword index)"];
+      if (blobTerms && blobTerms.length > 0) {
+        const term = blobTerms[0];
+        const idx = blob.indexOf(term);
+        if (idx !== -1) {
+          const start = Math.max(0, idx - 80);
+          const end   = Math.min(blob.length, idx + 200);
+          website_snippet = blob.slice(start, end).trim();
+        }
+      }
+
+      // Summarise which non-blob fields matched (e.g. "Specific Country Interest: paraguay")
+      const field_matches = Object.entries(matches || {})
+        .filter(([f]) => f !== "Website & publications (keyword index)")
+        .map(([f, terms]) => `${f}: ${terms.join(", ")}`)
+        .join("; ");
+
+      return {
+        slug:               r.slug || "",
+        name:               r.name || r.slug || "",
+        institution:        r.institution || "",
+        research_interests: sf["Research Interests (open text)"] || "",
+        sectors:            sf["Sectors"] || "",
+        initiatives:        sf["Initiatives"] || "",
+        web_bio:            sf["Web Bio"] || "",
+        field_matches,
+        website_snippet,
+      };
+    });
+
+    try {
+      const resp = await fetch("/synthesize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query, results }),
+      });
+      if (!resp.ok) return;
+      const explanations = await resp.json(); // { slug: "explanation text", ... }
+
+      for (const [slug, text] of Object.entries(explanations)) {
+        const card = resultsContainer.querySelector(`[data-slug="${CSS.escape(slug)}"]`);
+        if (!card) continue;
+        const el = card.querySelector(".card-synthesis");
+        if (el) el.textContent = text;
+      }
+    } catch {
+      // synthesis is best-effort; silently ignore failures
+    }
+  }
+
+  function renderCard({ r, matches }) {
     const card = document.createElement("div");
     card.className = "card";
 
@@ -874,9 +947,6 @@
     const linksHtml =
       linkPieces.length > 0 ? `<div class="card-links">${linkPieces.join(" · ")}</div>` : "";
 
-    const boostHtml =
-      boost > 0.001 ? `<div class="score-boost">+${boost.toFixed(3)} keyword</div>` : "";
-
     let tagsHtml = "";
     if (sf["Sectors"]) {
       sf["Sectors"]
@@ -946,9 +1016,10 @@
 
     const hasEvidence = evidenceHtml.length > 0;
 
+    const slug = r.slug || "";
+    card.dataset.slug = slug;
     card.innerHTML = `
       <div class="card-header">
-        <div class="rank-badge">${rank}</div>
         <div class="card-main">
           ${nameHtml}
           ${typeHtml}
@@ -956,12 +1027,9 @@
           ${metaLines}
           ${linksHtml}
         </div>
-        <div class="card-score">
-          <div class="score-value">score ${score.toFixed(3)}</div>
-          ${boostHtml}
-        </div>
       </div>
       ${tagsHtml ? `<div class="tags">${tagsHtml}</div>` : ""}
+      <div class="card-synthesis" aria-live="polite"></div>
       ${bioHtml}
       ${
         hasEvidence
@@ -1035,14 +1103,13 @@
         </svg>
         <p>Enter a topic, a researcher name (e.g. <em>Esther Duflo</em>), or use the refine panel.
         Inline filters: <code>country:</code> <code>office:</code> <code>language:</code> <code>university:</code> <code>sector:</code> <code>type:</code>.
-        All matching researchers are shown, ranked and paginated.</p>
+        All matching researchers are shown, paginated.</p>
       </div>`;
   }
 
   // ── Export helpers ──────────────────────────────────────────────────
 
   const EXPORT_COLUMNS = [
-    { key: "rank", label: "Rank" },
     { key: "name", label: "Name" },
     { key: "institution", label: "Institution" },
     { key: "type", label: "Researcher Type" },
@@ -1051,17 +1118,15 @@
     { key: "offices", label: "J-PAL Offices" },
     { key: "languages", label: "Languages" },
     { key: "interests", label: "Research Interests" },
-    { key: "score", label: "Score" },
     { key: "website", label: "Website" },
   ];
 
   function buildExportRows() {
     if (!searchResultsState) return [];
-    return searchResultsState.allResults.map((item, i) => {
+    return searchResultsState.allResults.map((item) => {
       const r = item.r;
       const kf = r.key_fields || {};
       return {
-        rank: i + 1,
         name: r.name || r.slug || "",
         institution: r.institution || "",
         type: (kf["Researcher Type"] || "").replace(/;/g, ", "),
@@ -1070,7 +1135,6 @@
         offices: kf.offices || "",
         languages: kf.Languages || "",
         interests: truncate(kf["Research Interests (open text)"] || "", 300),
-        score: item.score != null ? item.score.toFixed(3) : "",
         website: r.website_url || r.personal_page_url || "",
       };
     });
@@ -1153,14 +1217,12 @@
     doc.text(title, 40, 30);
 
     const pdfCols = [
-      { key: "rank", label: "Rank" },
       { key: "name", label: "Name" },
       { key: "institution", label: "Institution" },
       { key: "type", label: "Type" },
       { key: "country", label: "Country" },
       { key: "sectors", label: "Sectors" },
       { key: "offices", label: "Offices" },
-      { key: "score", label: "Score" },
     ];
 
     const head = [pdfCols.map((c) => c.label)];

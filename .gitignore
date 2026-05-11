@@ -21,5 +21,8 @@ cache/
 .idea/
 .vscode/
 
+# Local scratch / external material not part of this repo
+othercode/
+
 # Optional: keep compact index out of git (use Git LFS or CI to build)
 # frontend/profiles_index.json

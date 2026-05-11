@@ -33,6 +33,11 @@ EMBEDDINGS_JSONL = Path("output/index/documents_with_embeddings.jsonl")
 META_FILE = Path("output/index/embed_meta.json")
 PROFILES_DIR = Path("output/profiles")
 COMPACT_INDEX_DEFAULT = Path("frontend/profiles_index.json")
+CHROMA_INDEX_DEFAULT = Path("output/chroma_index")
+CHROMA_COLLECTION = "researchers"
+# How many candidates to pull from ChromaDB before grouping full+narrative per researcher.
+# Generous multiplier ensures top researchers appear regardless of which embedding type ranks.
+_CHROMA_CANDIDATE_MULT = 6
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
@@ -335,6 +340,86 @@ def search_compact(
 
 
 # ---------------------------------------------------------------------------
+# ChromaDB index (HNSW approximate nearest-neighbour — fast, robust)
+# ---------------------------------------------------------------------------
+
+def search_chroma(
+    query_emb: List[float],
+    chroma_dir: Path,
+    top_n: int,
+    filter_initiative: Optional[str],
+) -> List[Dict[str, Any]]:
+    """
+    Rank researchers using ChromaDB's HNSW index.
+
+    Mirrors search_compact's max(full, narrative) scoring: both embedding types
+    are stored as separate ChromaDB entries, and the higher similarity wins per
+    researcher after grouping.  Output format is identical to search_compact.
+    """
+    try:
+        import chromadb
+    except ImportError:
+        raise RuntimeError("chromadb not installed. Run: pip install chromadb")
+
+    client = chromadb.PersistentClient(path=str(chroma_dir))
+    collection = client.get_collection(CHROMA_COLLECTION)
+
+    # Request more than top_n to cover both full and narrative entries per researcher.
+    n_results = min(top_n * _CHROMA_CANDIDATE_MULT, collection.count())
+
+    results = collection.query(
+        query_embeddings=[query_emb],
+        n_results=n_results,
+        include=["metadatas", "distances"],
+    )
+
+    needle = filter_initiative.lower() if filter_initiative else None
+
+    # Group by slug; keep the highest similarity across full and narrative entries.
+    slug_score: Dict[str, float] = {}
+    slug_meta: Dict[str, dict]   = {}
+
+    for i in range(len(results["ids"][0])):
+        meta     = results["metadatas"][0][i]
+        distance = results["distances"][0][i]
+        score    = 1.0 - distance  # cosine distance → similarity
+        slug     = meta.get("slug", "")
+        if not slug:
+            continue
+        if needle:
+            init = meta.get("kf__Initiatives", "").lower()
+            if needle not in init:
+                continue
+        if slug not in slug_score or score > slug_score[slug]:
+            slug_score[slug] = score
+            slug_meta[slug]  = meta
+
+    ranked: List[Dict[str, Any]] = []
+    for slug, score in slug_score.items():
+        meta = slug_meta[slug]
+        name = meta.get("name") or slug
+        # Reconstruct key_fields from the kf__-prefixed metadata keys.
+        kf: Dict[str, Any] = {}
+        for k, v in meta.items():
+            if k.startswith("kf__"):
+                kf[k[4:]] = v
+        if meta.get("institution"):
+            kf.setdefault("institution", meta["institution"])
+
+        ranked.append({
+            "slug": slug,
+            "name": name,
+            "score": round(score, 4),
+            "score_by_type": {"profile_avg": round(score, 4)},
+            "_evidence_chunks": [],
+            "_compact_key_fields": kf,
+        })
+
+    ranked.sort(key=lambda x: x["score"], reverse=True)
+    return ranked
+
+
+# ---------------------------------------------------------------------------
 # Load index
 # ---------------------------------------------------------------------------
 
@@ -572,6 +657,8 @@ def main() -> None:
                         help="Use full chunk embeddings file (slow, large). Default uses compact index when available.")
     parser.add_argument("--compact-index", default=str(COMPACT_INDEX_DEFAULT),
                         help="Path to profiles_index.json from export_compact_index")
+    parser.add_argument("--chroma-index", default=str(CHROMA_INDEX_DEFAULT),
+                        help="Path to ChromaDB directory (from build_chroma_index). Used automatically when present.")
     args = parser.parse_args()
 
     _load_dotenv_project_root()
@@ -591,13 +678,19 @@ def main() -> None:
         sys.exit(1)
 
     compact_path = Path(args.compact_index)
-    emb_path = Path(args.embeddings)
-    use_compact = (not args.chunk_index) and compact_path.exists()
+    chroma_path  = Path(args.chroma_index)
+    emb_path     = Path(args.embeddings)
 
-    if not use_compact and not emb_path.exists():
+    # Preference order: ChromaDB (HNSW, fast) > compact JSON > full chunk JSONL
+    use_chroma  = (not args.chunk_index) and (chroma_path / "chroma.sqlite3").exists()
+    use_compact = (not args.chunk_index) and (not use_chroma) and compact_path.exists()
+
+    if not use_chroma and not use_compact and not emb_path.exists():
         print(
-            "ERROR: No search index found. Either run `python3 -m src.index.export_compact_index` "
-            f"(creates {compact_path}) or build {emb_path} and pass --chunk-index.",
+            "ERROR: No search index found.\n"
+            "  Fastest: run `python3 -m src.index.build_chroma_index` (creates ChromaDB HNSW index)\n"
+            f"  Or:      run `python3 -m src.index.export_compact_index` (creates {compact_path})\n"
+            f"  Or:      build {emb_path} and pass --chunk-index.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -612,7 +705,28 @@ def main() -> None:
     print(f"Embedding query: '{args.query}'", file=sys.stderr)
     query_emb = embed_query(args.query, model, client)
 
-    if use_compact:
+    if use_chroma:
+        print(f"Searching via ChromaDB (HNSW) at {chroma_path}...", file=sys.stderr)
+        t0 = time.time()
+        ranked = search_chroma(query_emb, chroma_path, args.top, args.filter_initiative)
+        print(f"ChromaDB search done in {time.time()-t0:.2f}s ({len(ranked)} candidates)", file=sys.stderr)
+        print("Applying keyword boost...", file=sys.stderr)
+        query_terms = extract_query_terms(args.query)
+        # Prefer compact index for keyword boost (has full keyword blob); fall back to ranked metadata.
+        if compact_path.exists():
+            compact_rows = load_compact_index(compact_path)
+            profile_meta = compact_rows_to_profile_meta(compact_rows)
+        else:
+            profile_meta = {
+                r["slug"]: {
+                    field: str((r.get("_compact_key_fields") or {}).get(field) or "").lower()
+                    for field in KEYWORD_BOOST_WEIGHTS
+                }
+                for r in ranked if r.get("slug")
+            }
+        ranked = apply_keyword_boost(ranked, query_terms, profile_meta)
+        results = format_results(ranked, args.top, None)
+    elif use_compact:
         print(f"Loading compact index from {compact_path}...", file=sys.stderr)
         t0 = time.time()
         compact_rows = load_compact_index(compact_path)
