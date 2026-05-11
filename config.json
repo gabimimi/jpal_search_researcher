@@ -1,0 +1,8 @@
+{
+  "embedApiUrl": "http://localhost:8000/embed",
+  "indexUrl": "",
+  "pageSize": 30,
+  "relevanceFloor": 0.30,
+  "relevanceMargin": 0.1,
+  "topN": 30
+}
